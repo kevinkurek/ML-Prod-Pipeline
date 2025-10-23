@@ -1,5 +1,4 @@
-.terraform/
-.terraform.lock.hcl
+
 __pycache__/
 *.pyc
 *.pyo
@@ -10,3 +9,10 @@ dist/
 build/
 .ipynb_checkpoints/
 .DS_Store
+
+# Terraform local state
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
