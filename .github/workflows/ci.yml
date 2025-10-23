@@ -2,19 +2,32 @@ name: ci
 
 on:
   push:
-    branches: [ main ]   # runs automatically on push to main
-  workflow_dispatch: {}   # allows manual trigger from the Actions tab
+    branches: [ main ]
+  workflow_dispatch: {}
 
 permissions:
-  id-token: write         # needed for OIDC federation with AWS
-  contents: read          # allows checkout of repo
+  id-token: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show GitHub context (repo/branch)
+        run: |
+          echo "repo=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          echo "role=${{ vars.AWS_ROLE_TO_ASSUME }}"
+
+      - name: Ensure role ARN is set
+        run: |
+          if [ -z "${{ vars.AWS_ROLE_TO_ASSUME }}" ]; then
+            echo "ERROR: repo Actions Variable AWS_ROLE_TO_ASSUME is empty or missing."
+            echo "Add it in Settings → Actions → Variables, or let Terraform create it."
+            exit 1
+          fi
 
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
