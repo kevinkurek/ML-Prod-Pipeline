@@ -1,0 +1,11 @@
+version: "3.9"
+services:
+  inference:
+    build: ./services/inference
+    environment:
+      - ARTIFACTS_BUCKET=local-dev
+      - MODEL_KEY=models/condor_xgb.json
+      - MODEL_PATH=/app/model.json
+    ports:
+      - "8080:8080"
+    command: ["uvicorn","app:app","--host","0.0.0.0","--port","8080"]

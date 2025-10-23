@@ -1,0 +1,12 @@
+.terraform/
+.terraform.lock.hcl
+__pycache__/
+*.pyc
+*.pyo
+.env
+.envrc
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+.DS_Store
