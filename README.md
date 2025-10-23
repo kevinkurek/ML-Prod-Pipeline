@@ -130,12 +130,81 @@ make build-push ACCOUNT_ID="${ACCOUNT_ID}" AWS_REGION="${AWS_REGION}"
 export AWS_PROFILE=kevin_sandbox
 export AWS_REGION=us-west-2
 
-make whoami
-make bootstrap
-make plan
-make apply
-make build-push
-make outputs
+make whoami      # confirm creds are set
+make setup       # confirm local .venv is set
+make bootstrap   # terraform init
+make plan        # terraform plan
+make apply       # terraform apply - VPC, S3, ECR, ECS, IAM
+make outputs     # confirm terraform built correctly
+make prep-data   # push dataset to s3
+make build-push  # push train & inference images to ECR
 ```
 
-## 
+## Confirm terraform & account
+```bash
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ROLE_ARN=$(aws iam get-role --role-name condor-sagemaker-exec --query Role.Arn --output text)
+ART_BUCKET=$(cd infra/terraform && terraform output -raw artifacts_bucket)
+DATA_BUCKET=$(cd infra/terraform && terraform output -raw data_bucket)
+echo "ACCOUNT_ID=$ACCOUNT_ID
+ROLE_ARN=$ROLE_ARN
+ART_BUCKET=$ART_BUCKET
+DATA_BUCKET=$DATA_BUCKET
+AWS_REGION=$AWS_REGION"
+```
+
+## Start a SageMaker training job
+```bash
+
+# confirm data is in s3
+aws s3 ls "s3://${DATA_BUCKET}/features/" --region "$AWS_REGION"
+
+# start a training job
+TRAIN_IMAGE="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/condor-training:latest"
+JOB="condor-xgb-$(date +%Y%m%d%H%M%S)"
+
+aws sagemaker create-training-job \
+  --region "$AWS_REGION" \
+  --training-job-name "$JOB" \
+  --role-arn "$ROLE_ARN" \
+  --algorithm-specification TrainingImage="$TRAIN_IMAGE",TrainingInputMode=File \
+  --input-data-config "[{\"ChannelName\":\"train\",\"DataSource\":{\"S3DataSource\":{\"S3Uri\":\"s3://${DATA_BUCKET}/features/\",\"S3DataType\":\"S3Prefix\",\"S3DataDistributionType\":\"FullyReplicated\"}}}]" \
+  --output-data-config S3OutputPath="s3://${ART_BUCKET}/models/" \
+  --resource-config InstanceType=ml.m5.large,InstanceCount=1,VolumeSizeInGB=10 \
+  --stopping-condition MaxRuntimeInSeconds=900,MaxWaitTimeInSeconds=1800 \
+  --enable-managed-spot-training \
+  --checkpoint-config S3Uri="s3://${ART_BUCKET}/checkpoints/",LocalPath="/opt/ml/checkpoints"
+
+# wait for training job return status
+aws sagemaker wait training-job-completed-or-stopped --training-job-name "$JOB" --region "$AWS_REGION"
+```
+
+## Debug a SageMaker training job
+```bash
+# Will see this inside SageMaker AI -> Training Jobs
+   condor-xgb-20xxxxxxxx 10/23/2025, 12:40:44 PM
+
+# get the log stream if you encounter a failure
+aws logs describe-log-streams \
+  --log-group-name /aws/sagemaker/TrainingJobs \
+  --log-stream-name-prefix "$JOB" \
+  --query 'logStreams[].logStreamName' --output text \
+  --region "$AWS_REGION"
+>>
+  condor-xgb-20251023124715/algo-1-1761248879
+
+# get the logs out of that value
+aws logs get-log-events \
+  --log-group-name /aws/sagemaker/TrainingJobs \
+  --log-stream-name "condor-xgb-20251023124715/algo-1-1761248879" \
+  --limit 200 --query 'events[].message' --output text \
+  --region "$AWS_REGION"
+>>
+  [FATAL tini (7)] exec python failed: Exec format error
+# ^ means you built your image on apple silicon but sagemaker expected linux/amd64, needed to add --platform linux/amd64 to Makefile for images being built before pushed to ECR
+
+# confirm they're now amd64
+docker inspect condor-training:latest | grep Architecture
+>>
+  "Architecture": "amd64",
+```

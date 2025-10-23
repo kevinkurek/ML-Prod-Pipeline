@@ -3,19 +3,32 @@ on:
   workflow_dispatch: {}
   push:
     branches: [ main ]
+
+permissions:
+  id-token: write   # ✅ allows OIDC token exchange
+  contents: read    # ✅ allows checkout to work
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - name: Configure AWS
+
+      # ✅ Configure AWS credentials via OIDC (no secrets needed)
+      - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: arn:aws:iam::<ACCOUNT_ID>:role/condor-gha-ecr-push   # 👈 replace with your actual ARN from terraform output
           aws-region: us-west-2
+          role-session-name: gha-condor-build
+
+      - name: Verify AWS connection
+        run: aws sts get-caller-identity
+
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
+
       - name: Build & Push
         run: |
           ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)

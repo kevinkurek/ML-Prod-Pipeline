@@ -1,5 +1,12 @@
-FROM python:3.11-slim
-RUN pip install --no-cache-dir fastapi uvicorn xgboost pandas boto3
+# syntax=docker/dockerfile:1.6
+ARG TARGETPLATFORM=linux/amd64
+FROM --platform=${TARGETPLATFORM} python:3.11-slim
+
+RUN apt-get update && apt-get install build-essential -y
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-cache-dir fastapi uvicorn xgboost pandas boto3
+
 WORKDIR /app
 COPY app.py .
 ENV PORT=8080

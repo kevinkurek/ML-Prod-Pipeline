@@ -1,0 +1,8 @@
+# Local helper tools (prep-data, etc.)
+pandas
+numpy
+boto3
+jmespath
+
+# Optional but often useful
+awscli

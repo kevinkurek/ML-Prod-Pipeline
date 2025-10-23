@@ -16,6 +16,15 @@ export AWS_SDK_LOAD_CONFIG=1
 
 .PHONY: whoami ecr-login build push build-push bootstrap plan apply outputs destroy plan-destroy nuke-ecr
 
+.PHONY: setup
+setup:
+	python3 -m venv .venv
+	. .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
+
+.PHONY: prep-data
+prep-data:
+	python tools/prepare_data.py --bucket $$(cd infra/terraform && terraform output -raw data_bucket) --prefix features/ --min_rows 10000 --region $(AWS_REGION)
+
 whoami:
 	@echo "Profile: $(AWS_PROFILE)  Region: $(AWS_REGION)  Account: $(ACCOUNT_ID)"
 
@@ -24,8 +33,8 @@ ecr-login: whoami
 	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
 
 build:
-	docker build -t condor-training:latest services/training
-	docker build -t condor-inference:latest services/inference
+	docker build --platform linux/amd64 -t condor-training:latest services/training --load
+	docker build --platform linux/amd64 -t condor-inference:latest services/inference --load
 
 # make sure terraform apply has been run to create ECR repos before pushing
 push: ecr-login
