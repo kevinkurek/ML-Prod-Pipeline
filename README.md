@@ -1,6 +1,8 @@
 # ML Production Pipeline (Starter)
 
 This is a **code-first** starter to deploy a minimal ML pipeline on AWS using:
+- **Terraform (infra coordination)**
+- **Github Actions (auto-deployment of images to ECR)**
 - **Docker + ECS (Fargate first, EC2-ready)**
 - **SageMaker** for training/hosting
 - **MWAA (managed Airflow)** for orchestration
