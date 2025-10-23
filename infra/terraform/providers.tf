@@ -20,5 +20,4 @@ provider "aws" {
 
 provider "github" {
   owner = var.github_owner
-  # token read from env GITHUB_TOKEN during terraform apply
 }

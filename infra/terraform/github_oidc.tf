@@ -10,7 +10,7 @@ variable "github_owner" {
 
 variable "github_repo" {
   type    = string
-  default = "ml-prod-pipeline"
+  default = "ML-Prod-Pipeline"
 }
 
 variable "github_branch" {
