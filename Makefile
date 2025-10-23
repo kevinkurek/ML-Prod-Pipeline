@@ -1,7 +1,7 @@
 # ---- Config (override at runtime: make apply AWS_REGION=us-west-2 PREFIX=condor) ----
 AWS_REGION ?= us-west-2
 PREFIX ?= condor
-AWS_PROFILE ?= kevin_sandbox
+AWS_PROFILE ?= $(if $(CI),,$(shell echo kevin_sandbox)) # Only default to kevin_sandbox if we're running interactively (not CI)
 
 # Resolve ACCOUNT_ID dynamically (do NOT precompute at parse time in CI)
 # ACCOUNT_ID := $(shell AWS_PROFILE=$(AWS_PROFILE) AWS_REGION=$(AWS_REGION) aws sts get-caller-identity --query Account --output text 2>/dev/null)
