@@ -210,3 +210,92 @@ docker inspect condor-training:latest | grep Architecture
 >>
   "Architecture": "amd64",
 ```
+
+## Deploying an endpoint
+```bash
+# Most recent training job
+JOB=$(aws sagemaker list-training-jobs \
+  --region "$AWS_REGION" \
+  --sort-by CreationTime --sort-order Descending \
+  --max-results 1 \
+  --query 'TrainingJobSummaries[0].TrainingJobName' --output text)
+
+echo "Using training job: $JOB"
+
+# see the model artifact in s3
+MODEL_DATA=$(aws sagemaker describe-training-job \
+  --region "$AWS_REGION" \
+  --training-job-name "$JOB" \
+  --query 'ModelArtifacts.S3ModelArtifacts' --output text)
+
+echo "MODEL_DATA=$MODEL_DATA"
+
+# register model in sagemaker
+INF_IMAGE="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/condor-inference:latest"
+
+# you must supply the specific endpoint here to avoid sagemakers error
+# Model entrypoint executable "serve" was not found in container PATH
+aws sagemaker create-model \
+  --region "$AWS_REGION" \
+  --model-name "$JOB" \
+  --primary-container Image="$INF_IMAGE",ModelDataUrl="$MODEL_DATA",Mode=SingleModel \
+  --execution-role-arn "$ROLE_ARN"
+
+# create serverless endpoint config - this is cheapest for POC
+aws sagemaker create-endpoint-config \
+  --region "$AWS_REGION" \
+  --endpoint-config-name "condor-xgb-sls" \
+  --production-variants "[{\"ModelName\":\"${JOB}\",\"VariantName\":\"AllTraffic\",\"ServerlessConfig\":{\"MemorySizeInMB\":2048,\"MaxConcurrency\":1}}]"
+
+# create a new endpoint
+aws sagemaker create-endpoint \
+  --region "$AWS_REGION" \
+  --endpoint-name "condor-xgb" \
+  --endpoint-config-name "condor-xgb-sls"
+
+aws sagemaker wait endpoint-in-service --endpoint-name "condor-xgb" --region "$AWS_REGION"
+>>
+  (This takes some time... about 10min for me first time)
+  "EndpointArn": "arn:aws:sagemaker..../condor-xgb"
+
+
+
+# OR update an existing endpoint if you have one already
+aws sagemaker update-endpoint \
+  --region "$AWS_REGION" \
+  --endpoint-name "condor-xgb" \
+  --endpoint-config-name "condor-xgb-sls"
+
+aws sagemaker wait endpoint-in-service --endpoint-name "condor-xgb" --region "$AWS_REGION"
+
+# SMOKE TEST the endpoint
+aws sagemaker-runtime invoke-endpoint \
+  --region "$AWS_REGION" \
+  --endpoint-name "condor-xgb" \
+  --content-type "application/json" \
+  --accept "application/json" \
+  --body fileb://payload.json \
+  out.json && cat out.json
+  >>
+    {"prob_end_between":0.729040265083313,"prediction":1}% 
+```
+
+## Cleanup an endpoint
+```bash
+aws sagemaker delete-endpoint --endpoint-name "condor-xgb" --region "$AWS_REGION"
+aws sagemaker delete-endpoint-config --endpoint-config-name "condor-xgb-sls" --region "$AWS_REGION"
+aws sagemaker delete-model --model-name "$JOB" --region "$AWS_REGION"
+```
+
+## Rough billing approximation command
+```bash
+aws ce get-cost-and-usage \
+  --time-period Start=$(date -v1d +%Y-%m-01),End=$(date -v+1m -v1d +%Y-%m-01) \
+  --granularity MONTHLY \
+  --metrics "BlendedCost" \
+  --region us-east-1 \
+  --query 'ResultsByTime[0].Total.BlendedCost.Amount' \
+  --output text
+>>
+  2.2969
+```

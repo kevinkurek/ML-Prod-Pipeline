@@ -80,3 +80,63 @@ nuke-ecr:
 	@repos=$$(aws ecr describe-repositories --region "$(AWS_REGION)" --query 'repositories[].repositoryName' --output text) ; \
 	if [ -z "$$repos" ]; then echo "No ECR repos"; else \
 	 for r in $$repos; do echo "Deleting $$r (force)"; aws ecr delete-repository --repository-name "$$r" --region "$(AWS_REGION)" --force; done ; fi
+
+
+# ---- SageMaker cleanup ----
+.PHONY: sm-status sm-teardown
+
+sm-status:
+	@echo "Endpoint status:"
+	-aws sagemaker describe-endpoint --endpoint-name condor-xgb --region $(AWS_REGION) --query '{Name:EndpointName,Status:EndpointStatus,Config:EndpointConfigName}' --output table || true
+	@echo "Endpoint configs (condor):"
+	-aws sagemaker list-endpoint-configs --name-contains condor --region $(AWS_REGION) --query 'EndpointConfigs[].EndpointConfigName' --output table || true
+	@echo "Models (condor):"
+	-aws sagemaker list-models --name-contains condor --region $(AWS_REGION) --query 'Models[].ModelName' --output table || true
+
+# Deletes endpoint -> its config -> its models (derived from the config)
+sm-teardown:
+	@EP=condor-xgb; \
+	CFG=$$(aws sagemaker describe-endpoint --endpoint-name $$EP --region $(AWS_REGION) --query EndpointConfigName --output text 2>/dev/null || true); \
+	echo "Deleting SageMaker endpoint: $$EP (config=$$CFG)"; \
+	aws sagemaker delete-endpoint --endpoint-name $$EP --region $(AWS_REGION) 2>/dev/null || true; \
+	aws sagemaker wait endpoint-deleted --endpoint-name $$EP --region $(AWS_REGION) 2>/dev/null || true; \
+	if [ -n "$$CFG" ] && [ "$$CFG" != "None" ]; then \
+	  echo "Deleting endpoint config: $$CFG"; \
+	  MODELS=$$(aws sagemaker describe-endpoint-config --endpoint-config-name $$CFG --region $(AWS_REGION) --query 'ProductionVariants[].ModelName' --output text 2>/dev/null || true); \
+	  aws sagemaker delete-endpoint-config --endpoint-config-name $$CFG --region $(AWS_REGION) 2>/dev/null || true; \
+	  for m in $$MODELS; do \
+	    if [ -n "$$m" ] && [ "$$m" != "None" ]; then \
+	      echo "Deleting model: $$m"; \
+	      aws sagemaker delete-model --model-name "$$m" --region $(AWS_REGION) 2>/dev/null || true; \
+	    fi; \
+	  done; \
+	fi
+
+# ---- S3 cleanup (empties the condor* buckets from TF outputs) ----
+.PHONY: empty-buckets
+empty-buckets:
+	@DATA_BUCKET=$$(cd infra/terraform && terraform output -raw data_bucket 2>/dev/null || true); \
+	ART_BUCKET=$$(cd infra/terraform && terraform output -raw artifacts_bucket 2>/dev/null || true); \
+	LOGS_BUCKET=$$(cd infra/terraform && terraform output -raw logs_bucket 2>/dev/null || true); \
+	for B in $$DATA_BUCKET $$ART_BUCKET $$LOGS_BUCKET; do \
+	  if [ -n "$$B" ]; then \
+	    echo "Emptying s3://$$B ..."; \
+	    aws s3 rm "s3://$$B" --recursive --region "$(AWS_REGION)" || true; \
+	  fi; \
+	done
+
+# ---- Full teardown (endpoint + buckets + ecr + terraform destroy) ----
+.PHONY: down
+down: sm-teardown empty-buckets nuke-ecr destroy
+
+# ---- Quick monthly cost check (requires Cost Explorer enabled) ----
+.PHONY: cost
+cost:
+	@echo -n "Month-to-date blended cost (USD): "; \
+	aws ce get-cost-and-usage \
+	  --time-period Start=$$(date -v1d +%Y-%m-01),End=$$(date -v+1m -v1d +%Y-%m-01) \
+	  --granularity MONTHLY \
+	  --metrics BlendedCost \
+	  --region us-east-1 \
+	  --query 'ResultsByTime[0].Total.BlendedCost.Amount' \
+	  --output text 2>/dev/null || echo "Enable Cost Explorer first"
