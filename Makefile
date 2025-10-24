@@ -1,23 +1,12 @@
 # ---- Config (override at runtime: make apply AWS_REGION=us-west-2 PREFIX=condor) ----
 AWS_REGION ?= us-west-2
 PREFIX ?= condor
-# AWS_PROFILE ?= $(if $(CI),,$(shell echo kevin_sandbox)) # Only default to kevin_sandbox if we're running interactively (not CI)
-
-# Resolve ACCOUNT_ID dynamically (do NOT precompute at parse time in CI)
-# ACCOUNT_ID := $(shell AWS_PROFILE=$(AWS_PROFILE) AWS_REGION=$(AWS_REGION) aws sts get-caller-identity --query Account --output text 2>/dev/null)
-
-# These will be tagged at runtime after ACCOUNT_ID is resolved inside targets
-# ECR_TRAINING ?= $(ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/condor-training:latest
-# ECR_INFERENCE ?= $(ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/condor-inference:latest
 
 # Do not export AWS_PROFILE globally; CI does not have this profile.
 # export AWS_PROFILE
 export AWS_REGION
 export AWS_DEFAULT_REGION=$(AWS_REGION)
 export AWS_SDK_LOAD_CONFIG=1
-
-# Add --profile only if AWS_PROFILE is set (great for local, harmless in CI)
-# PROFILE_FLAG := $(if $(AWS_PROFILE),--profile $(AWS_PROFILE),)
 
 .PHONY: whoami ecr-login build push build-push bootstrap plan apply outputs destroy plan-destroy nuke-ecr setup prep-data
 
@@ -40,8 +29,8 @@ ecr-login: whoami
 
 build:
 	# Ensure amd64 images for SageMaker + consistent CI builds
-	docker buildx build --platform linux/amd64 -t condor-training:latest services/training --load
-	docker buildx build --platform linux/amd64 -t condor-inference:latest services/inference --load
+	docker build --platform linux/amd64 -t condor-training:latest services/training --load
+	docker build --platform linux/amd64 -t condor-inference:latest services/inference --load
 
 # make sure terraform apply has been run to create ECR repos before pushing
 push: ecr-login
@@ -81,6 +70,91 @@ nuke-ecr:
 	if [ -z "$$repos" ]; then echo "No ECR repos"; else \
 	 for r in $$repos; do echo "Deleting $$r (force)"; aws ecr delete-repository --repository-name "$$r" --region "$(AWS_REGION)" --force; done ; fi
 
+# --- SageMaker training and endpoint creation ---
+.PHONY: sm-train sm-create-endpoint sm-smoke-test
+
+# Train a model on SageMaker using the training image and data in S3
+sm-train:
+	@set -e; \
+	ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)); \
+	DATA_BUCKET=$$(terraform -chdir=infra/terraform output -raw data_bucket); \
+	ART_BUCKET=$$(terraform -chdir=infra/terraform output -raw artifacts_bucket); \
+	ROLE_ARN=$$(terraform -chdir=infra/terraform output -raw sagemaker_role_arn 2>/dev/null || echo ""); \
+	if [ -z "$$ROLE_ARN" ]; then echo "❌ Missing ROLE_ARN from Terraform outputs"; exit 1; fi; \
+	TRAIN_IMAGE="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-training:latest"; \
+	JOB="condor-xgb-$$(date +%Y%m%d%H%M%S)"; \
+	echo "🚀 Starting SageMaker training job: $$JOB"; \
+	aws sagemaker create-training-job \
+	  --region "$(AWS_REGION)" \
+	  --training-job-name "$$JOB" \
+	  --role-arn "$$ROLE_ARN" \
+	  --algorithm-specification TrainingImage="$$TRAIN_IMAGE",TrainingInputMode=File \
+	  --input-data-config "$$(printf '[{"ChannelName":"train","DataSource":{"S3DataSource":{"S3Uri":"s3://%s/features/","S3DataType":"S3Prefix","S3DataDistributionType":"FullyReplicated"}}}]' $$DATA_BUCKET)" \
+	  --output-data-config S3OutputPath="s3://$$ART_BUCKET/models/" \
+	  --resource-config InstanceType=ml.m5.large,InstanceCount=1,VolumeSizeInGB=10 \
+	  --stopping-condition MaxRuntimeInSeconds=900,MaxWaitTimeInSeconds=1800 \
+	  --enable-managed-spot-training \
+	  --checkpoint-config S3Uri="s3://$$ART_BUCKET/checkpoints/",LocalPath="/opt/ml/checkpoints"; \
+	echo "⏳ Waiting for training job $$JOB to complete..."; \
+	aws sagemaker wait training-job-completed-or-stopped --training-job-name "$$JOB" --region "$(AWS_REGION)"; \
+	echo "✅ Training completed successfully!"
+
+# Create SageMaker endpoint from the most recent training job
+sm-create-endpoint:
+	@set -e; \
+	ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)); \
+	ART_BUCKET=$$(cd infra/terraform && terraform output -raw artifacts_bucket); \
+	ROLE_ARN=$$(cd infra/terraform && terraform output -raw sagemaker_role_arn 2>/dev/null || echo ""); \
+	if [ -z "$$ROLE_ARN" ]; then echo "Missing ROLE_ARN from Terraform outputs"; exit 1; fi; \
+	JOB=$$(aws sagemaker list-training-jobs \
+	  --region "$(AWS_REGION)" \
+	  --sort-by CreationTime --sort-order Descending \
+	  --max-results 1 \
+	  --query 'TrainingJobSummaries[0].TrainingJobName' --output text); \
+	echo "Using training job: $$JOB"; \
+	MODEL_DATA=$$(aws sagemaker describe-training-job \
+	  --region "$(AWS_REGION)" \
+	  --training-job-name "$$JOB" \
+	  --query 'ModelArtifacts.S3ModelArtifacts' --output text); \
+	echo "Model artifact: $$MODEL_DATA"; \
+	INF_IMAGE="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-inference:latest"; \
+	echo "Registering model..."; \
+	aws sagemaker create-model \
+	  --region "$(AWS_REGION)" \
+	  --model-name "$$JOB" \
+	  --primary-container Image="$$INF_IMAGE",ModelDataUrl="$$MODEL_DATA",Mode=SingleModel \
+	  --execution-role-arn "$$ROLE_ARN"; \
+	echo "Creating endpoint config..."; \
+	aws sagemaker create-endpoint-config \
+	  --region "$(AWS_REGION)" \
+	  --endpoint-config-name "condor-xgb-sls" \
+	  --production-variants "[{\"ModelName\":\"$$JOB\",\"VariantName\":\"AllTraffic\",\"ServerlessConfig\":{\"MemorySizeInMB\":2048,\"MaxConcurrency\":1}}]"; \
+	echo "Deploying endpoint..."; \
+	aws sagemaker create-endpoint \
+	  --region "$(AWS_REGION)" \
+	  --endpoint-name "condor-xgb" \
+	  --endpoint-config-name "condor-xgb-sls"; \
+	echo "Waiting for endpoint to become InService (≈10min first time)..."; \
+	aws sagemaker wait endpoint-in-service --endpoint-name "condor-xgb" --region "$(AWS_REGION)"; \
+	echo "✅ Endpoint ready."; \
+	aws sagemaker describe-endpoint --endpoint-name "condor-xgb" --region "$(AWS_REGION)" --query '{Status:EndpointStatus, Arn:EndpointArn}' --output table
+
+# Simple local payload sanity test (requires payload.json)
+sm-smoke-test:
+	@set -e; \
+	if [ ! -f payload.json ]; then \
+	  echo '{"dte":1,"mid_dist":0.004,"wings":0.018,"atm_iv":0.13,"skew":-0.02,"rv5":0.08,"trend1d":0.001}' > payload.json; \
+	  echo "Created default payload.json"; \
+	fi; \
+	echo "Invoking condor-xgb endpoint..."; \
+	aws sagemaker-runtime invoke-endpoint \
+	  --region "$(AWS_REGION)" \
+	  --endpoint-name "condor-xgb" \
+	  --content-type "application/json" \
+	  --accept "application/json" \
+	  --body fileb://payload.json out.json; \
+	echo "✅ Response:"; \
+	cat out.json; echo
 
 # ---- SageMaker cleanup ----
 .PHONY: sm-status sm-teardown

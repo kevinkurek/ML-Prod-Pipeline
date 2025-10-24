@@ -9,6 +9,76 @@ This is a **code-first** starter to deploy a minimal ML pipeline on AWS using:
 - **ECR, S3, CloudWatch, IAM**
 
 ## Quick Start
+The Makefile has automated a ton of the build steps.
+```bash
+# 1. Start in project root, creates virtual env (.venv) & installs requirements
+$ cd ml-prod-pipeline
+$ make setup
+>>
+  (.venv folder now in root directory)
+
+# 2. Run AWS configure to set up the AWS IAM user
+$ aws configure
+>>
+  (Follow prompts)
+
+# 3. Set up terraform resources - VPC, ECR, ECS, etc.
+$ make boostrap
+>> initializes terraform
+
+$ make plan
+>> shows terraform plan
+
+$ make apply
+>> applies terraform plan and deploys AWS resources
+
+# 4. Build Docker images & push to ECR
+$ make build-push
+>> will see images inside AWS ECR
+
+# 5. Create and send data to S3 buckets created by terraform
+# NOTE: this step generates synthetic data to the bucket if there isn't any present so the example can run.
+$ make prep-data
+>>
+  Uploaded 10,000 rows to s3://condor-data-xxxx/features/condor_train_20xxxxx.csv
+
+# 6. Create a sagemaker training job from that uploaded data
+$ make sm-train
+>>
+   🚀 Starting SageMaker training job: condor-xgb-xxx
+   {
+      "TrainingJobArn": "arn:aws:sagemaker:us-west-2:xxx:training-job/condor-xgb-xxx"
+   }
+   ⏳ Waiting for training job condor-xgb-xxx to complete...
+   ✅ Training completed successfully!
+
+# 7. Create an endpoint from that trained model - registers model, endpoint config, & deploys endpoint
+$ make sm-create-endpoint
+>>
+   Waiting for endpoint to become InService (≈10min first time)...
+   ✅ Endpoint ready.
+   -------------------------------------------------------------------------------
+   |                              DescribeEndpoint                               |
+   +----------------------------------------------------------------+------------+
+   |                               Arn                              |  Status    |
+   +----------------------------------------------------------------+------------+
+   |  arn:aws:sagemaker:us-west-2:xxx:endpoint/condor-xgb           |  InService |
+   +----------------------------------------------------------------+------------+
+
+# 8. Send a smoke test to the API
+$ make sm-smoke-test
+>>
+   Invoking condor-xgb endpoint...
+   {
+      "ContentType": "application/json",
+      "InvokedProductionVariant": "AllTraffic"
+   }
+   ✅ Response:
+   {"prob_end_between":0.0185269583016634,"prediction":0}
+
+```
+
+<!-- ## Quick Start
 1. Install: Terraform, AWS CLI, Docker, Python 3.11.
 2. **Login to AWS** (`aws configure`) and ensure your user has admin in a sandbox account.
 3. Build & push containers to ECR:
@@ -22,7 +92,7 @@ This is a **code-first** starter to deploy a minimal ML pipeline on AWS using:
    terraform apply -var="prefix=condor" -var="region=us-west-2"
    ```
 5. Upload Airflow DAGs to the MWAA bucket (if created) or run Airflow locally (docker-compose to be added).
-6. Trigger the `condor_ml_pipeline` DAG and verify the SageMaker endpoint `condor-xgb` becomes **InService**.
+6. Trigger the `condor_ml_pipeline` DAG and verify the SageMaker endpoint `condor-xgb` becomes **InService**. -->
 
 > Notes:
 > - MWAA & SageMaker infra are partially stubbed—keep/extend as needed.

@@ -43,6 +43,9 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build & Push
+        env:
+          AWS_REGION: us-west-2
+          AWS_PROFILE: ""
+          AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}   # <-- add this
         run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          make build-push ACCOUNT_ID=$ACCOUNT_ID AWS_REGION=us-west-2
+          make build-push
