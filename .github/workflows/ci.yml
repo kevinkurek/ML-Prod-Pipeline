@@ -45,7 +45,6 @@ jobs:
       - name: Build & Push
         env:
           AWS_REGION: us-west-2
-          AWS_PROFILE: ""
           AWS_ROLE_TO_ASSUME: ${{ vars.AWS_ROLE_TO_ASSUME }}   # <-- add this
         run: |
           make build-push
