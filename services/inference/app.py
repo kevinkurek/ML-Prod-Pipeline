@@ -102,7 +102,7 @@ async def invocations(request: Request):
     # Return single dict if single-row input for convenience
     return results[0] if isinstance(payload, dict) and "instances" not in payload else results
 
-# (Optional) Keep your original route if you want a custom endpoint too
+# Keep your original route if you want a custom endpoint too
 @app.post("/predict")
 def predict(payload: Dict[str, Any]):
     df = _ensure_dataframe(payload)

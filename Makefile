@@ -71,7 +71,7 @@ nuke-ecr:
 	 for r in $$repos; do echo "Deleting $$r (force)"; aws ecr delete-repository --repository-name "$$r" --region "$(AWS_REGION)" --force; done ; fi
 
 # --- SageMaker training and endpoint creation ---
-.PHONY: sm-train sm-create-endpoint sm-smoke-test
+.PHONY: sm-train sm-create-endpoint sm-smoke-test sm-logs
 
 # Train a model on SageMaker using the training image and data in S3
 sm-train:
@@ -155,6 +155,20 @@ sm-smoke-test:
 	  --body fileb://payload.json out.json; \
 	echo "✅ Response:"; \
 	cat out.json; echo
+
+sm-logs:
+	@aws logs get-log-events \
+	  --region $(AWS_REGION) \
+	  --log-group-name /aws/sagemaker/Endpoints/condor-xgb \
+	  --log-stream-name "$$(aws logs describe-log-streams \
+	        --log-group-name /aws/sagemaker/Endpoints/condor-xgb \
+	        --order-by LastEventTime \
+	        --descending \
+	        --query 'logStreams[0].logStreamName' \
+	        --output text)" \
+	  --limit 10 \
+	  --query 'events[].{Time:@.timestamp,Message:@.message}' \
+	  --output table
 
 # ---- SageMaker cleanup ----
 .PHONY: sm-status sm-teardown

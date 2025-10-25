@@ -76,27 +76,38 @@ $ make sm-smoke-test
    ✅ Response:
    {"prob_end_between":0.0185269583016634,"prediction":0}
 
+# 9. View logs for API request sent
+$ make sm-logs
+>>
+   ----------------------------------------------------------------------------------------------
+   |                                        GetLogEvents                                        |
+   +---------------------------------------------------------------------------+----------------+
+   |                                  Message                                  |     Time       |
+   +---------------------------------------------------------------------------+----------------+
+   |  INFO:     Started server process [15]                                    |  1761329136964 |
+   |  INFO:     Waiting for application startup.                               |  1761329136965 |
+   |  INFO:     Application startup complete.                                  |  1761329136965 |
+   |  INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)  |  1761329136965 |
+   |  INFO:     127.0.0.1:38402 - "GET /ping HTTP/1.1" 200 OK                  |  1761329138587 |
+   |  INFO:     127.0.0.1:38412 - "POST /invocations HTTP/1.1" 200 OK          |  1761329139244 |
+   +---------------------------------------------------------------------------+----------------+
+
 ```
 
-<!-- ## Quick Start
-1. Install: Terraform, AWS CLI, Docker, Python 3.11.
-2. **Login to AWS** (`aws configure`) and ensure your user has admin in a sandbox account.
-3. Build & push containers to ECR:
-   ```bash
-   make build-push
-   ```
-4. Provision baseline infra (VPC, S3, ECR, ECS cluster, IAM):
-   ```bash
-   cd infra/terraform
-   terraform init
-   terraform apply -var="prefix=condor" -var="region=us-west-2"
-   ```
-5. Upload Airflow DAGs to the MWAA bucket (if created) or run Airflow locally (docker-compose to be added).
-6. Trigger the `condor_ml_pipeline` DAG and verify the SageMaker endpoint `condor-xgb` becomes **InService**. -->
-
-> Notes:
-> - MWAA & SageMaker infra are partially stubbed—keep/extend as needed.
-> - The **toy model** is not finance advice; it's just demo scaffolding.
+## Tear Down Everything
+```bash
+# Tear down everyting. 
+# make down = sm-teardown empty-buckets nuke-ecr destroy
+# sm-teardown - tear down all sagemaker services
+# empty-buckets - clear all s3 buckets
+# nuke-ecr - clear all images inside ecr
+# destory - tear down all terraform resources - VPC, Subnets, NAT Gateway, IGW, ECR, S3, etc..
+$ make down
+>>
+  Deleting SageMaker endpoint: condor-xgb
+  ...
+  Destroy complete! Resources: 32 destroyed.
+```
 
 ## Repo Layout
 ```
@@ -169,13 +180,12 @@ aws ec2 describe-vpcs --region "$AWS_REGION" \
 ## After terraform resources are created
 ```bash
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE
-export AWS_PROFILE=kevin_sandbox
 export AWS_REGION=us-west-2
 export AWS_SDK_LOAD_CONFIG=1
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo $ACCOUNT_ID
 >>
-    17......80
+    1......xxx
 
 ART_BUCKET=$(terraform output -raw artifacts_bucket)
 echo $ART_BUCKET
@@ -196,22 +206,6 @@ Login Succeeded
 make build-push ACCOUNT_ID="${ACCOUNT_ID}" AWS_REGION="${AWS_REGION}"
 ```
 
-## Streamline via Makefile
-```bash
-# once per shell
-export AWS_PROFILE=kevin_sandbox
-export AWS_REGION=us-west-2
-
-make whoami      # confirm creds are set
-make setup       # confirm local .venv is set
-make bootstrap   # terraform init
-make plan        # terraform plan
-make apply       # terraform apply - VPC, S3, ECR, ECS, IAM
-make outputs     # confirm terraform built correctly
-make prep-data   # push dataset to s3
-make build-push  # push train & inference images to ECR
-```
-
 ## Confirm terraform & account
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -227,7 +221,6 @@ AWS_REGION=$AWS_REGION"
 
 ## Start a SageMaker training job
 ```bash
-
 # confirm data is in s3
 aws s3 ls "s3://${DATA_BUCKET}/features/" --region "$AWS_REGION"
 
@@ -348,6 +341,36 @@ aws sagemaker-runtime invoke-endpoint \
   out.json && cat out.json
   >>
     {"prob_end_between":0.729040265083313,"prediction":1}% 
+```
+
+## Look at API endpoint logs
+```bash
+# see the last 10 call logs to SageMaker Endpoint
+aws logs get-log-events \
+  --region us-west-2 \
+  --log-group-name /aws/sagemaker/Endpoints/condor-xgb \
+  --log-stream-name "$(aws logs describe-log-streams \
+        --log-group-name /aws/sagemaker/Endpoints/condor-xgb \
+        --order-by LastEventTime \
+        --descending \
+        --query 'logStreams[0].logStreamName' \
+        --output text)" \
+  --limit 10 \
+  --query 'events[].{Time:@.timestamp,Message:@.message}' \
+  --output table
+>>
+   ----------------------------------------------------------------------------------------------
+   |                                        GetLogEvents                                        |
+   +---------------------------------------------------------------------------+----------------+
+   |                                  Message                                  |     Time       |
+   +---------------------------------------------------------------------------+----------------+
+   |  INFO:     Started server process [15]                                    |  1761329136964 |
+   |  INFO:     Waiting for application startup.                               |  1761329136965 |
+   |  INFO:     Application startup complete.                                  |  1761329136965 |
+   |  INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)  |  1761329136965 |
+   |  INFO:     127.0.0.1:38402 - "GET /ping HTTP/1.1" 200 OK                  |  1761329138587 |
+   |  INFO:     127.0.0.1:38412 - "POST /invocations HTTP/1.1" 200 OK          |  1761329139244 |
+   +---------------------------------------------------------------------------+----------------+
 ```
 
 ## Cleanup an endpoint
