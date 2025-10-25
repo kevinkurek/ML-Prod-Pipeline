@@ -392,3 +392,10 @@ aws ce get-cost-and-usage \
 >>
   2.2969
 ```
+
+## Local Airflow Dev
+```bash
+cd airflow
+docker compose up airflow-init
+docker compose up -d airflow-scheduler airflow-apiserver airflow-worker
+```

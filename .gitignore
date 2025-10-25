@@ -16,3 +16,6 @@ build/
 .terraform/
 .terraform.lock.hcl
 crash.log
+
+# no config files
+*.cfg
