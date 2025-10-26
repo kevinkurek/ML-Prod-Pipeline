@@ -2,7 +2,6 @@
 from __future__ import annotations
 from datetime import datetime
 from airflow import DAG
-from airflow.models import Variable
 from airflow.providers.amazon.aws.operators.sagemaker import (
     SageMakerTrainingOperator,
     SageMakerModelOperator,
@@ -11,24 +10,9 @@ from airflow.providers.amazon.aws.operators.sagemaker import (
 )
 from airflow.providers.amazon.aws.operators.ecs import EcsRunTaskOperator
 from airflow.providers.amazon.aws.sensors.sagemaker import SageMakerEndpointSensor
-from airflow.operators.python import PythonOperator
+from airflow.providers.standard.operators.python import PythonOperator
 
-# ----- Airflow Variables (fail fast if missing) -----
-ecs_cluster_arn = Variable.get("ecs_cluster_arn")
-features_task_def_arn = Variable.get("features_task_def_arn")
-private_subnets = Variable.get("private_subnets")  # JSON string -> use fromjson in template
-ecs_sg_ids = Variable.get("ecs_sg_ids")            # JSON string -> use fromjson in template
-
-sagemaker_role_arn = Variable.get("sagemaker_role_arn")
-training_image_uri = Variable.get("training_image_uri")
-inference_image_uri = Variable.get("inference_image_uri")
-data_bucket = Variable.get("data_bucket")
-artifacts_bucket = Variable.get("artifacts_bucket")
-
-default_args = {
-    "owner": "ml",
-    "retries": 0,
-}
+default_args = {"owner": "ml", "retries": 0}
 
 with DAG(
     dag_id="condor_ml_pipeline",
@@ -40,24 +24,27 @@ with DAG(
 ) as dag:
 
     # 1) Build features on Fargate → write to s3://<data_bucket>/features/...
+    # All config comes from Airflow Variables via Jinja, so the DAG can import even if Variables are not set yet.
     build_features = EcsRunTaskOperator(
         task_id="build_features",
-        cluster=ecs_cluster_arn,
-        task_definition=features_task_def_arn,
+        cluster="{{ var.value.ecs_cluster_arn }}",
+        task_definition="{{ var.value.features_task_def_arn }}",
         launch_type="FARGATE",
         network_configuration={
             "awsvpcConfiguration": {
-                # NOTE: store these Airflow Variables as JSON arrays and parse with fromjson
-                "subnets": "{{ var.value.private_subnets | fromjson }}",
-                "securityGroups": "{{ var.value.ecs_sg_ids | fromjson }}",
+                "subnets": "{{ var.value.private_subnets | default('[]') | fromjson }}",
+                "securityGroups": "{{ var.value.ecs_sg_ids | default('[]') | fromjson }}",
                 "assignPublicIp": "DISABLED",
             }
+        },
+        overrides={
+            # minimal stub; replace with your container name/env if needed
+            # "containerOverrides": [{"name": "features", "environment": [{"name":"FOO","value":"bar"}]}]
         },
         aws_conn_id="aws_default",
     )
 
-    # Compose TrainingJobName from execution date (unique per day)
-    # Airflow will render {{ ds_nodash }} to YYYYMMDD
+    # Compose TrainingJobName from execution date (unique per day), rendered by Airflow at runtime
     training_job_name = "condor-xgb-{{ ds_nodash }}"
 
     # 2) Train on SageMaker
@@ -65,9 +52,9 @@ with DAG(
         task_id="train",
         config={
             "TrainingJobName": training_job_name,
-            "RoleArn": sagemaker_role_arn,
+            "RoleArn": "{{ var.value.sagemaker_role_arn }}",
             "AlgorithmSpecification": {
-                "TrainingImage": training_image_uri,
+                "TrainingImage": "{{ var.value.training_image_uri }}",
                 "TrainingInputMode": "File",
             },
             "InputDataConfig": [
@@ -75,14 +62,16 @@ with DAG(
                     "ChannelName": "train",
                     "DataSource": {
                         "S3DataSource": {
-                            "S3Uri": f"s3://{data_bucket}/features/",
+                            "S3Uri": "s3://{{ var.value.data_bucket }}/features/",
                             "S3DataType": "S3Prefix",
                             "S3DataDistributionType": "FullyReplicated",
                         }
                     },
                 }
             ],
-            "OutputDataConfig": {"S3OutputPath": f"s3://{artifacts_bucket}/models/"},
+            "OutputDataConfig": {
+                "S3OutputPath": "s3://{{ var.value.artifacts_bucket }}/models/"
+            },
             "ResourceConfig": {
                 # keep dev-cheap; bump as needed
                 "InstanceType": "ml.t3.medium",
@@ -90,27 +79,25 @@ with DAG(
                 "VolumeSizeInGB": 10,
             },
             "StoppingCondition": {"MaxRuntimeInSeconds": 900},
-            # Add Spot if you like (ensure role perms incl. checkpoint S3)
+            # Example if you want Spot later:
             # "EnableManagedSpotTraining": True,
             # "CheckpointConfig": {
-            #     "S3Uri": f"s3://{artifacts_bucket}/checkpoints/",
+            #     "S3Uri": "s3://{{ var.value.artifacts_bucket }}/checkpoints/",
             #     "LocalPath": "/opt/ml/checkpoints",
             # },
         },
-        wait_for_completion=True,  # block until the training job ends
+        wait_for_completion=True,
         check_interval=30,
         aws_conn_id="aws_default",
     )
 
-    # 2b) Resolve ModelDataUrl reliably by describing the training job
+    # 2b) Describe the training job to get ModelArtifacts.S3ModelArtifacts
     def grab_model_data_url(**context):
-        import boto3
-        ti = context["ti"]
+        import boto3, os
+        sm = boto3.client("sagemaker", region_name=os.getenv("AWS_REGION", "us-west-2"))
         job_name = context["templates_dict"]["job_name"]
-        sm = boto3.client("sagemaker")
         resp = sm.describe_training_job(TrainingJobName=job_name)
-        model_s3 = resp["ModelArtifacts"]["S3ModelArtifacts"]
-        ti.xcom_push(key="model_data_url", value=model_s3)
+        context["ti"].xcom_push(key="model_data_url", value=resp["ModelArtifacts"]["S3ModelArtifacts"])
 
     get_model_data = PythonOperator(
         task_id="get_model_data",
@@ -124,11 +111,11 @@ with DAG(
         config={
             "ModelName": training_job_name,  # tie model name to training job date
             "PrimaryContainer": {
-                "Image": inference_image_uri,
+                "Image": "{{ var.value.inference_image_uri }}",
                 "ModelDataUrl": "{{ ti.xcom_pull(task_ids='get_model_data', key='model_data_url') }}",
                 "Mode": "SingleModel",
             },
-            "ExecutionRoleArn": sagemaker_role_arn,
+            "ExecutionRoleArn": "{{ var.value.sagemaker_role_arn }}",
         },
         aws_conn_id="aws_default",
     )
@@ -171,3 +158,6 @@ with DAG(
     )
 
     build_features >> sm_train >> get_model_data >> create_model >> create_cfg >> deploy >> health
+
+if __name__ == "__main__":
+    dag.test()

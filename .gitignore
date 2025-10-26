@@ -19,3 +19,6 @@ crash.log
 
 # no config files
 *.cfg
+
+# no verbose airflow logs
+airflow/logs/

@@ -1,4 +1,4 @@
-# ML Production Pipeline (Starter)
+# ML Production Pipeline
 
 This is a **code-first** starter to deploy a minimal ML pipeline on AWS using:
 - **Terraform (infra coordination)**
@@ -396,6 +396,23 @@ aws ce get-cost-and-usage \
 ## Local Airflow Dev
 ```bash
 cd airflow
-docker compose up airflow-init
-docker compose up -d airflow-scheduler airflow-apiserver airflow-worker
+docker compose up -d
+```
+
+## Confirm airflow-apiserver sees local dags
+```bash
+
+# confirm your local DAGs are there 
+docker compose exec airflow-apiserver ls -la /opt/airflow/dags
+>>
+  test.py
+  condor_pipeline.py
+
+# confirm no upload errors in the DAG
+docker compose exec airflow-apiserver airflow dags list-import-errors
+>>
+  "No data found" means it worked.
+
+# list all DAGs (examples will be there too)
+docker compose exec airflow-apiserver airflow dags list | grep -i condor
 ```

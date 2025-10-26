@@ -228,3 +228,23 @@ cost:
 	  --region us-east-1 \
 	  --query 'ResultsByTime[0].Total.BlendedCost.Amount' \
 	  --output text 2>/dev/null || echo "Enable Cost Explorer first"
+
+# --- Airflow commands ---
+.PHONY: af-list af-errors af-render af-test af-shell
+
+af-list:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow dags list
+
+af-errors:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow dags list-import-errors || true
+
+# usage: make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+af-render:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow tasks render $(DAG) $(TASK) $(DS)
+
+# usage: make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+af-test:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow tasks test $(DAG) $(TASK) $(DS)
+
+af-shell:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash
