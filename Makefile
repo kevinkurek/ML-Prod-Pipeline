@@ -230,7 +230,7 @@ cost:
 	  --output text 2>/dev/null || echo "Enable Cost Explorer first"
 
 # --- Airflow commands ---
-.PHONY: af-list af-errors af-render af-test af-shell
+.PHONY: af-list af-errors af-render af-test af-shell af-vars
 
 af-list:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow dags list
@@ -248,3 +248,16 @@ af-test:
 
 af-shell:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash
+
+af-vars:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\
+	airflow variables set sagemaker_role_arn "arn:aws:iam::123:role/dummy" && \
+	airflow variables set training_image_uri "111.dkr.ecr.us-west-2.amazonaws.com/condor-training:latest" && \
+	airflow variables set inference_image_uri "111.dkr.ecr.us-west-2.amazonaws.com/condor-inference:latest" && \
+	airflow variables set data_bucket "condor-data-x" && \
+	airflow variables set artifacts_bucket "condor-artifacts-x" && \
+	airflow variables set ecs_cluster_arn "arn:aws:ecs:us-west-2:123:cluster/dummy" && \
+	airflow variables set features_task_def_arn "arn:aws:ecs:us-west-2:123:task-definition/dummy:1" && \
+	airflow variables set private_subnets "subnet-aaa,subnet-bbb" && \
+	airflow variables set ecs_sg_ids "sg-xxx,sg-yyy" \
+	'	

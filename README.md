@@ -395,8 +395,36 @@ aws ce get-cost-and-usage \
 
 ## Local Airflow Dev
 ```bash
-cd airflow
+cd airflows
 docker compose up -d
+```
+
+## Makefile Helpers
+```bash
+make af-list                # list all airflow dags
+make af-errors              # check if any dag upload errors
+make af-shell               # get inside airflow API shell; 
+   $ python dags/test.py    # run test.py DAG in debug mode
+make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26    # dry-run jinja templating & config for a task
+make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26      # execute task locally but in isolation, confirms aws permissions
+```
+
+## Create fake AWS vars to confirm jinja templating while AWS resources are down
+```bash
+# 1. create fake aws env variables to confirm jinja injection is working
+make af-vars
+
+# 2. render to confirm a dry-run jinja is correct
+make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+>>
+  {'TrainingJobName': 'condor-xgb-xxxxxxxx', 
+  'RoleArn': 'arn:aws:iam::123:role/dummy', 
+  'AlgorithmSpecification': {
+  'TrainingImage': '111.dkr.ecr.us-west-2.amazonaws.com/condor-training:latest', 
+  'TrainingInputMode': 'File'}, 
+  'InputDataConfig': [{'ChannelName': 'train', 'DataSource': {'S3DataSource': {'S3Uri': 's3://condor-data-x/features/', 'S3DataType': 'S3Prefix', 'S3DataDistributionType': 'FullyReplicated'}}}], 
+  'OutputDataConfig': {'S3OutputPath': 's3://condor-artifacts-x/models/'}, 
+  'ResourceConfig': {'InstanceType': 'ml.t3.medium', 'InstanceCount': 1, 'VolumeSizeInGB': 10}, 'StoppingCondition': {'MaxRuntimeInSeconds': 900}}
 ```
 
 ## Confirm airflow-apiserver sees local dags
