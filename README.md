@@ -22,6 +22,19 @@ $ aws configure
 >>
   (Follow prompts)
 
+# set a .env folder at root folder level
+$ cd ml-prod-pipeline
+$ touch .env
+$ nano .env
+>>
+  # fill in
+  # AWS_ACCESS_KEY=xxxxxx
+  # AWS_SECRET_ACCESS_KEY=xxxxxx
+  # AWS_PROFILE=kevin_xxxx (this is a unique IAM User that has admin privileges in AWS)
+  # AWS_REGION=us-west-x
+  # PREFIX=condor
+  # GITHUB_TOKEN=ghp_xxxxxxx
+
 # 3. Set up terraform resources - VPC, ECR, ECS, etc.
 $ make boostrap
 >> initializes terraform
@@ -395,7 +408,7 @@ aws ce get-cost-and-usage \
 
 ## Local Airflow Dev
 ```bash
-cd airflows
+cd airflow
 docker compose up -d
 ```
 
@@ -443,4 +456,25 @@ docker compose exec airflow-apiserver airflow dags list-import-errors
 
 # list all DAGs (examples will be there too)
 docker compose exec airflow-apiserver airflow dags list | grep -i condor
+```
+
+## Run a real local airflow render & test
+```bash
+# clear out any fake or temp vars that might be hanging in airflow
+$ make af-vars-clear
+
+# set airflow variables from terraform generated values 
+$ make af-vars-from-tf
+
+# show what was set
+$ make af-vars-show
+
+# show a local render
+make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+
+# do a local docker test
+make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+
+# trigger the actual DAG (which you can see in the UI)
+make af-trigger DAG=condor_ml_pipeline
 ```

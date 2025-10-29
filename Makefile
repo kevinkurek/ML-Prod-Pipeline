@@ -1,21 +1,33 @@
-# ---- Config (override at runtime: make apply AWS_REGION=us-west-2 PREFIX=condor) ----
-AWS_REGION ?= us-west-2
-PREFIX ?= condor
+# Load .env but do NOT blindly export all keys (avoid overriding AWS creds)
+ifneq (,$(wildcard .env))
+include .env
+# Explicitly export only what you want
+export AWS_REGION GITHUB_TOKEN PREFIX AWS_PROFILE
+endif
 
-# Do not export AWS_PROFILE globally; CI does not have this profile.
-# export AWS_PROFILE
-export AWS_REGION
+# Some defaults
 export AWS_DEFAULT_REGION=$(AWS_REGION)
 export AWS_SDK_LOAD_CONFIG=1
 
-.PHONY: whoami ecr-login build push build-push bootstrap plan apply outputs destroy plan-destroy nuke-ecr setup prep-data
+# --- Python venv wiring ---
+VENV_DIR := .venv
+PYTHON   := $(VENV_DIR)/bin/python
+PIP      := $(VENV_DIR)/bin/pip
+
+.PHONY: whoami ecr-login build push build-push bootstrap plan apply outputs destroy plan-destroy nuke-ecr setup prep-data env-check
+
+env-check:
+	@echo "AWS_REGION=$(AWS_REGION)"
+	@echo "GITHUB_TOKEN set? $${GITHUB_TOKEN:+yes}${GITHUB_TOKEN:+" (length $$(( $${#GITHUB_TOKEN} )))"}"
+	@echo "AWS_PROFILE=$${AWS_PROFILE:-<none>}"
 
 setup:
-	python3 -m venv .venv
-	. .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
+	python3 -m venv $(VENV_DIR)
+	$(PIP) install --upgrade pip
+	$(PIP) install -r requirements.txt
 
 prep-data:
-	python tools/prepare_data.py --bucket $$(cd infra/terraform && terraform output -raw data_bucket) --prefix features/ --min_rows 10000 --region $(AWS_REGION)
+	$(PYTHON) tools/prepare_data.py --bucket $$(cd infra/terraform && terraform output -raw data_bucket) --prefix features/ --min_rows 10000 --region $(AWS_REGION)
 
 whoami:
 	@echo "Profile: $${AWS_PROFILE:-<none>}  Region: $(AWS_REGION)"
@@ -230,7 +242,7 @@ cost:
 	  --output text 2>/dev/null || echo "Enable Cost Explorer first"
 
 # --- Airflow commands ---
-.PHONY: af-list af-errors af-render af-test af-shell af-vars
+.PHONY: af-list af-errors af-render af-test af-shell af-vars af-trigger
 
 af-list:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow dags list
@@ -245,6 +257,10 @@ af-render:
 # usage: make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
 af-test:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow tasks test $(DAG) $(TASK) $(DS)
+
+af-trigger:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver \
+	  airflow dags trigger $(DAG) --conf '{}'
 
 af-shell:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash
@@ -261,3 +277,52 @@ af-vars:
 	airflow variables set private_subnets "subnet-aaa,subnet-bbb" && \
 	airflow variables set ecs_sg_ids "sg-xxx,sg-yyy" \
 	'	
+
+# --- Airflow: load Variables from Terraform outputs ---
+.PHONY: af-vars-from-tf-min af-vars-clear af-vars-show
+
+af-vars-from-tf-min:
+	@cd infra/terraform && \
+	ROLE_ARN=$$(terraform output -raw sagemaker_role_arn) && \
+	DATA_BUCKET=$$(terraform output -raw data_bucket) && \
+	ART_BUCKET=$$(terraform output -raw artifacts_bucket) && \
+	ECS_CLUSTER=$$(terraform output -raw ecs_cluster_arn) && \
+	ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)) && \
+	TRAIN_IMAGE="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-training:latest" && \
+	INF_IMAGE="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-inference:latest" && \
+	echo "Setting Airflow Variables from Terraform and ECR…" && \
+	docker compose -f ../../airflow/docker-compose.yml exec \
+	  -e ROLE_ARN="$$ROLE_ARN" \
+	  -e DATA_BUCKET="$$DATA_BUCKET" \
+	  -e ART_BUCKET="$$ART_BUCKET" \
+	  -e ECS_CLUSTER="$$ECS_CLUSTER" \
+	  -e TRAIN_IMAGE="$$TRAIN_IMAGE" \
+	  -e INF_IMAGE="$$INF_IMAGE" \
+	  airflow-apiserver bash -lc '\
+	    airflow variables set sagemaker_role_arn "$$ROLE_ARN" && \
+	    airflow variables set data_bucket "$$DATA_BUCKET" && \
+	    airflow variables set artifacts_bucket "$$ART_BUCKET" && \
+	    airflow variables set ecs_cluster_arn "$$ECS_CLUSTER" && \
+	    airflow variables set training_image_uri "$$TRAIN_IMAGE" && \
+	    airflow variables set inference_image_uri "$$INF_IMAGE" && \
+	    airflow variables set private_subnets "[]" && \
+	    airflow variables set ecs_sg_ids "[]" \
+	  '
+
+af-vars-show:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\
+	  for k in sagemaker_role_arn data_bucket artifacts_bucket ecs_cluster_arn private_subnets ecs_sg_ids training_image_uri inference_image_uri; do \
+	    v=$$(airflow variables get $$k 2>/dev/null || true); \
+	    if [ -n "$$v" ]; then echo "$$k=$$v"; else echo "$$k=<MISSING>"; fi; \
+	  done \
+	'
+
+# if you need to clear out all previously set airflow variables
+af-vars-clear:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\
+	  for k in sagemaker_role_arn data_bucket artifacts_bucket ecs_cluster_arn \
+	           features_task_def_arn private_subnets ecs_sg_ids \
+	           training_image_uri inference_image_uri; do \
+	    airflow variables delete $$k || true; \
+	  done \
+	'

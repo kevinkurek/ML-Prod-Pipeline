@@ -9,6 +9,7 @@ from airflow.providers.amazon.aws.operators.sagemaker import (
 from airflow.providers.amazon.aws.operators.ecs import EcsRunTaskOperator
 from airflow.providers.amazon.aws.sensors.sagemaker import SageMakerEndpointSensor
 from airflow.providers.standard.operators.python import PythonOperator
+from airflow.operators.empty import EmptyOperator
 
 default_args = {"owner": "ml", "retries": 0}
 
@@ -27,23 +28,25 @@ with DAG(
     #  - sagemaker_role_arn, training_image_uri, inference_image_uri
     #  - data_bucket, artifacts_bucket
 
-    build_features = EcsRunTaskOperator(
-        task_id="build_features",
-        cluster="{{ var.value.get('ecs_cluster_arn') }}",
-        task_definition="{{ var.value.get('features_task_def_arn') }}",
-        launch_type="FARGATE",
-        network_configuration={
-            "awsvpcConfiguration": {
-                # store values as "subnet-a,subnet-b" and "sg-1,sg-2" in Variables
-                "subnets": "{{ var.value.get('private_subnets','') }}".split(","),
-                "securityGroups": "{{ var.value.get('ecs_sg_ids','') }}".split(","),
-                "assignPublicIp": "DISABLED",
-            }
-        },
-        # Airflow 3’s provider often expects overrides present (empty is ok)
-        overrides={},
-        aws_conn_id="aws_default",
-    )
+    features_td = "{{ var.value.features_task_def_arn | default('') }}"
+    if features_td:
+        build_features = EcsRunTaskOperator(
+            task_id="build_features",
+            cluster="{{ var.value.ecs_cluster_arn }}",
+            task_definition=features_td,
+            launch_type="FARGATE",
+            network_configuration={
+                "awsvpcConfiguration": {
+                    "subnets": "{{ var.value.private_subnets | default('[]') | fromjson }}",
+                    "securityGroups": "{{ var.value.ecs_sg_ids | default('[]') | fromjson }}",
+                    "assignPublicIp": "DISABLED",
+                }
+            },
+            overrides={},
+            aws_conn_id="aws_default",
+        )
+    else:
+        build_features = EmptyOperator(task_id="build_features_skip")
 
     training_job_name = "condor-xgb-{{ ds_nodash }}"
 
@@ -68,7 +71,7 @@ with DAG(
                 "S3OutputPath": "s3://{{ var.value.get('artifacts_bucket') }}/models/"
             },
             "ResourceConfig": {
-                "InstanceType": "ml.t3.medium",
+                "InstanceType": "ml.m5.large",
                 "InstanceCount": 1,
                 "VolumeSizeInGB": 10,
             },
