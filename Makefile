@@ -215,15 +215,21 @@ sm-teardown:
 # ---- S3 cleanup (empties the condor* buckets from TF outputs) ----
 .PHONY: empty-buckets
 empty-buckets:
-	@DATA_BUCKET=$$(cd infra/terraform && terraform output -raw data_bucket 2>/dev/null || true); \
-	ART_BUCKET=$$(cd infra/terraform && terraform output -raw artifacts_bucket 2>/dev/null || true); \
-	LOGS_BUCKET=$$(cd infra/terraform && terraform output -raw logs_bucket 2>/dev/null || true); \
-	for B in $$DATA_BUCKET $$ART_BUCKET $$LOGS_BUCKET; do \
-	  if [ -n "$$B" ]; then \
-	    echo "Emptying s3://$$B ..."; \
-	    aws s3 rm "s3://$$B" --recursive --region "$(AWS_REGION)" || true; \
+	@bash -lc 'set -euo pipefail; cd infra/terraform || exit 1; \
+	for key in data_bucket artifacts_bucket logs_bucket; do \
+	  val=$$(terraform output -raw $$key 2>/dev/null || echo ""); \
+	  case "$$val" in \
+	    "") echo "Skip $$key (missing)"; continue;; \
+	    *[!a-z0-9.-]*) echo "Skip $$key (invalid: $$val)"; continue;; \
+	  esac; \
+	  echo "Checking s3://$$val ..."; \
+	  if aws s3api head-bucket --bucket "$$val" --region "$(AWS_REGION)" 2>/dev/null; then \
+	    echo "Emptying s3://$$val ..."; \
+	    aws s3 rm "s3://$$val" --recursive --region "$(AWS_REGION)" || true; \
+	  else \
+	    echo "Skip $$key (head-bucket failed or access denied: $$val)"; \
 	  fi; \
-	done
+	done'
 
 # ---- Full teardown (endpoint + buckets + ecr + terraform destroy) ----
 .PHONY: down
@@ -242,7 +248,7 @@ cost:
 	  --output text 2>/dev/null || echo "Enable Cost Explorer first"
 
 # --- Airflow commands ---
-.PHONY: af-list af-errors af-render af-test af-shell af-vars af-trigger
+.PHONY: af-list af-errors af-render af-test af-shell af-vars af-var-set af-trigger
 
 af-list:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow dags list
@@ -258,12 +264,24 @@ af-render:
 af-test:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow tasks test $(DAG) $(TASK) $(DS)
 
+# af-trigger:
+# 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver \
+# 	  airflow dags trigger $(DAG) --conf '{}'
+
 af-trigger:
+	@LD=$${DS:+$${DS}T00:00:00Z}; \
+	[ -n "$$LD" ] || LD=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	echo "Triggering $(DAG) at $$LD"; \
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver \
-	  airflow dags trigger $(DAG) --conf '{}'
+	  airflow dags trigger "$(DAG)" --logical-date "$$LD" --conf '{}'
 
 af-shell:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash
+
+# generic setter
+af-var-set:
+	docker compose -f airflow/docker-compose.yml exec airflow-apiserver \
+	  airflow variables set $(K) "$(V)"
 
 af-vars:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\

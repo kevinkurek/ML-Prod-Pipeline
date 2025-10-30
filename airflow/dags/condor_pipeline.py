@@ -1,4 +1,4 @@
-# dags/condor_ml_pipeline.py
+# dags/condor_pipeline.py
 from __future__ import annotations
 from datetime import datetime
 from airflow import DAG
@@ -9,7 +9,9 @@ from airflow.providers.amazon.aws.operators.sagemaker import (
 from airflow.providers.amazon.aws.operators.ecs import EcsRunTaskOperator
 from airflow.providers.amazon.aws.sensors.sagemaker import SageMakerEndpointSensor
 from airflow.providers.standard.operators.python import PythonOperator
-from airflow.operators.empty import EmptyOperator
+from airflow.providers.standard.operators.empty import EmptyOperator
+import json
+from airflow.models import Variable
 
 default_args = {"owner": "ml", "retries": 0}
 
@@ -22,23 +24,26 @@ with DAG(
     tags=["condor", "ml"],
 ) as dag:
 
-    # Expect these Airflow Variables:
-    #  - ecs_cluster_arn, features_task_def_arn
-    #  - private_subnets (comma-separated), ecs_sg_ids (comma-separated)
-    #  - sagemaker_role_arn, training_image_uri, inference_image_uri
-    #  - data_bucket, artifacts_bucket
+    # Parse-time lookups (safe defaults)
+    features_td = Variable.get("features_task_def_arn", default_var="")
+    subnets = json.loads(Variable.get("private_subnets", default_var="[]"))
+    sgs = json.loads(Variable.get("ecs_sg_ids", default_var="[]"))
+    ROLE_ARN = Variable.get("sagemaker_role_arn")
+    TRAIN_IMG = Variable.get("training_image_uri")
+    INFER_IMG = Variable.get("inference_image_uri")
+    DATA_BUCKET = Variable.get("data_bucket")
+    ART_BUCKET = Variable.get("artifacts_bucket")
 
-    features_td = "{{ var.value.features_task_def_arn | default('') }}"
     if features_td:
         build_features = EcsRunTaskOperator(
             task_id="build_features",
-            cluster="{{ var.value.ecs_cluster_arn }}",
+            cluster=Variable.get("ecs_cluster_arn"),
             task_definition=features_td,
             launch_type="FARGATE",
             network_configuration={
                 "awsvpcConfiguration": {
-                    "subnets": "{{ var.value.private_subnets | default('[]') | fromjson }}",
-                    "securityGroups": "{{ var.value.ecs_sg_ids | default('[]') | fromjson }}",
+                    "subnets": subnets,
+                    "securityGroups": sgs,
                     "assignPublicIp": "DISABLED",
                 }
             },
@@ -48,27 +53,27 @@ with DAG(
     else:
         build_features = EmptyOperator(task_id="build_features_skip")
 
-    training_job_name = "condor-xgb-{{ ds_nodash }}"
+    training_job_name = "condor-xgb-{{ ds }}"
 
     sm_train = SageMakerTrainingOperator(
         task_id="train",
         config={
             "TrainingJobName": training_job_name,
-            "RoleArn": "{{ var.value.get('sagemaker_role_arn') }}",
+            "RoleArn": ROLE_ARN,
             "AlgorithmSpecification": {
-                "TrainingImage": "{{ var.value.get('training_image_uri') }}",
+                "TrainingImage": TRAIN_IMG,
                 "TrainingInputMode": "File",
             },
             "InputDataConfig": [{
                 "ChannelName": "train",
                 "DataSource": {"S3DataSource": {
-                    "S3Uri": "s3://{{ var.value.get('data_bucket') }}/features/",
+                    "S3Uri": f"s3://{DATA_BUCKET}/features/",
                     "S3DataType": "S3Prefix",
                     "S3DataDistributionType": "FullyReplicated",
                 }},
             }],
             "OutputDataConfig": {
-                "S3OutputPath": "s3://{{ var.value.get('artifacts_bucket') }}/models/"
+                "S3OutputPath": f"s3://{ART_BUCKET}/models/"
             },
             "ResourceConfig": {
                 "InstanceType": "ml.m5.large",
@@ -100,11 +105,11 @@ with DAG(
         config={
             "ModelName": training_job_name,
             "PrimaryContainer": {
-                "Image": "{{ var.value.get('inference_image_uri') }}",
+                "Image": INFER_IMG,
                 "ModelDataUrl": "{{ ti.xcom_pull(task_ids='get_model_data', key='model_data_url') }}",
                 "Mode": "SingleModel",
             },
-            "ExecutionRoleArn": "{{ var.value.get('sagemaker_role_arn') }}",
+            "ExecutionRoleArn": ROLE_ARN,
         },
         aws_conn_id="aws_default",
     )
@@ -112,7 +117,7 @@ with DAG(
     create_cfg = SageMakerEndpointConfigOperator(
         task_id="create_cfg",
         config={
-            "EndpointConfigName": "condor-xgb-cfg-{{ ds_nodash }}",
+            "EndpointConfigName": "condor-xgb-cfg-{{ ds }}",
             "ProductionVariants": [{
                 "ModelName": training_job_name,
                 "VariantName": "AllTraffic",
@@ -126,7 +131,7 @@ with DAG(
         task_id="deploy",
         config={
             "EndpointName": "condor-xgb",
-            "EndpointConfigName": "condor-xgb-cfg-{{ ds_nodash }}",
+            "EndpointConfigName": "condor-xgb-cfg-{{ ds }}",
         },
         wait_for_completion=True,
         check_interval=30,
@@ -142,3 +147,6 @@ with DAG(
     )
 
     build_features >> sm_train >> get_model_data >> create_model >> create_cfg >> deploy >> health
+
+if __name__ == "__main__":
+    dag.test()

@@ -5,8 +5,14 @@ This is a **code-first** starter to deploy a minimal ML pipeline on AWS using:
 - **Github Actions (auto-deployment of images to ECR)**
 - **Docker + ECS (Fargate first, EC2-ready)**
 - **SageMaker** for training/hosting
-- **MWAA (managed Airflow)** for orchestration
+- **MWAA (managed Airflow) & Local Docker Airflow** for orchestration
 - **ECR, S3, CloudWatch, IAM**
+
+## Airflow XGBoost SageMaker Training & API Endpoint Deployment
+![alt text](image-2.png)
+
+**Smoke-test of resulting API Endpoint**
+![alt text](image-3.png)
 
 ## Quick Start
 The Makefile has automated a ton of the build steps.
@@ -460,11 +466,17 @@ docker compose exec airflow-apiserver airflow dags list | grep -i condor
 
 ## Run a real local airflow render & test
 ```bash
+# make sure images are already pushed to ECR
+make build-push
+
+# confirm some data is in the bucket
+make prep-data
+
 # clear out any fake or temp vars that might be hanging in airflow
 $ make af-vars-clear
 
 # set airflow variables from terraform generated values 
-$ make af-vars-from-tf
+$ make af-vars-from-tf-min
 
 # show what was set
 $ make af-vars-show
@@ -474,6 +486,12 @@ make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
 
 # do a local docker test
 make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+
+# do a debug session inside AF (can see in UI)
+make af-shell
+python dags/condor_pipeline.py
+>>
+  DagRun Finished - SageMaker Endpoint Deployed
 
 # trigger the actual DAG (which you can see in the UI)
 make af-trigger DAG=condor_ml_pipeline
