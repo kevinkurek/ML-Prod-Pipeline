@@ -39,5 +39,15 @@ module "iam" {
   prefix = var.prefix
 }
 
+module "ecs" {
+  source              = "./modules/ecs"
+  name                = local.name
+  vpc_id              = module.vpc.vpc_id
+  private_subnet_ids  = module.vpc.private_subnets
+  security_group_ids  = []                         # not used by TF here; kept for future
+  data_bucket_name    = module.s3.buckets["data"].name
+  region              = var.region
+}
+
 # (Optional) MWAA & SageMaker extras can be added as separate modules later.
 # You can set MWAA variables/connection via console or TF if you add a module.

@@ -1,18 +1,20 @@
 # ML Production Pipeline
 
-This is a **code-first** starter to deploy a minimal ML pipeline on AWS using:
-- **Terraform (infra coordination)**
-- **Github Actions (auto-deployment of images to ECR)**
+This is a **code-only** deployment of a production end-to-end machine learning pipeline inclusive of MLOps on AWS using:
+- **Terraform (infra coordination)** - VPC, ECR, ECS, Fargate, S3, IAM, CloudWatch
+- **Github Actions (CI/CD)** - Auto-deployment of images to ECR on successful main branch commit
 - **Docker + ECS (Fargate first, EC2-ready)**
 - **SageMaker** for training/hosting
 - **MWAA (managed Airflow) & Local Docker Airflow** for orchestration
-- **ECR, S3, CloudWatch, IAM**
 
 ## Airflow XGBoost SageMaker Training & API Endpoint Deployment
 ![alt text](images/image-2.png)
 
-## Auto-promotion capabilites via SageMaker Model Registry
-![alt text](images/image.png)
+## ECS feature builds & SageMaker auto-promotion capabilites via SageMaker Model Registry
+![alt text](images/image_af_ecs_success.png)
+
+## Github Actions auto docker image build & push to ECR on successful main branch commit
+![alt text](images/image_gh.png)
 
 ## Smoke-test of resulting API Endpoint
 
@@ -27,12 +29,12 @@ $ make setup
 >>
   (.venv folder now in root directory)
 
-# 2. Run AWS configure to set up the AWS IAM user
+# 2a. Run AWS configure to set up the AWS IAM user
 $ aws configure
 >>
   (Follow prompts)
 
-# set a .env folder at root folder level
+# 2b. set a .env folder at root folder level
 $ cd ml-prod-pipeline
 $ touch .env
 $ nano .env
@@ -134,13 +136,51 @@ $ make down
 
 ## Repo Layout
 ```
-ml-prod-pipeline/
-├─ infra/terraform/    # IaC (Terraform)
-├─ services/           # Dockerized services (training/inference/batch)
-├─ airflow/            # Local Airflow DAGs and plugins
-├─ sagemaker/          # Optional SageMaker pipeline/registry helpers
-├─ Makefile            # Convenience targets
-└─ docker-compose.yml  # Local dev (optional)
+├── Makefile
+├── README.md
+├── airflow
+│   ├── dags
+│   │   ├── condor_pipeline.py
+│   │   └── test.py
+│   ├── docker-compose.yml
+│   └── requirements.txt
+├── images
+├── infra
+│   └── terraform
+│       ├── envs
+│       ├── github_oidc.tf
+│       ├── main.tf
+│       ├── modules
+│       │   ├── ecr
+│       │   ├── ecs
+│       │   ├── iam
+│       │   ├── s3
+│       │   └── vpc
+│       ├── outputs.tf
+│       ├── providers.tf
+│       └── variables.tf
+├── requirements.txt
+├── sagemaker
+│   ├── model_registry.py
+│   └── pipeline.py
+├── services
+│   ├── batch
+│   │   ├── Dockerfile
+│   │   └── score_batch.py
+│   ├── features
+│   │   ├── Dockerfile
+│   │   └── build_features.py
+│   ├── inference
+│   │   ├── Dockerfile
+│   │   ├── app.py
+│   │   ├── requirements.txt
+│   │   └── serve
+│   └── training
+│       ├── Dockerfile
+│       ├── requirements.txt
+│       └── train.py
+└── tools
+    └── prepare_data.py
 ```
 
 ## Run a Local Airflow Render, Test, Debug, & Trigger

@@ -36,26 +36,26 @@ resource "aws_iam_role_policy" "sagemaker_runtime" {
     Version = "2012-10-17",
     Statement = [
       {
-        "Sid": "EcrPull",
-        "Effect": "Allow",
-        "Action": [
+        "Sid" : "EcrPull",
+        "Effect" : "Allow",
+        "Action" : [
           "ecr:GetAuthorizationToken",
           "ecr:BatchGetImage",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchCheckLayerAvailability"
         ],
-        "Resource": "*"
+        "Resource" : "*"
       },
       {
-        "Sid": "Logs",
-        "Effect": "Allow",
-        "Action": [
+        "Sid" : "Logs",
+        "Effect" : "Allow",
+        "Action" : [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:DescribeLogStreams",
           "logs:PutLogEvents"
         ],
-        "Resource": "*"
+        "Resource" : "*"
       }
     ]
   })

@@ -26,25 +26,26 @@ with DAG(
 ) as dag:
 
     # Parse-time lookups (safe defaults)
-    features_td = Variable.get("features_task_def_arn", default_var="")
-    subnets = json.loads(Variable.get("private_subnets", default_var="[]"))
-    sgs = json.loads(Variable.get("ecs_sg_ids", default_var="[]"))
+    FEATURES_ARN = Variable.get("features_task_def_arn", default_var="")
+    SUBNETS = json.loads(Variable.get("private_subnets", default_var="[]"))
+    SG_IDS = json.loads(Variable.get("ecs_sg_ids", default_var="[]"))
     ROLE_ARN = Variable.get("sagemaker_role_arn")
     TRAIN_IMG = Variable.get("training_image_uri")
     INFER_IMG = Variable.get("inference_image_uri")
     DATA_BUCKET = Variable.get("data_bucket")
     ART_BUCKET = Variable.get("artifacts_bucket")
 
-    if features_td:
+    # EXPLANATION: ECS task to build features dataset and upload to S3
+    if FEATURES_ARN:
         build_features = EcsRunTaskOperator(
             task_id="build_features",
             cluster=Variable.get("ecs_cluster_arn"),
-            task_definition=features_td,
+            task_definition=FEATURES_ARN,
             launch_type="FARGATE",
             network_configuration={
                 "awsvpcConfiguration": {
-                    "subnets": subnets,
-                    "securityGroups": sgs,
+                    "subnets": SUBNETS,
+                    "securityGroups": SG_IDS,
                     "assignPublicIp": "DISABLED",
                 }
             },

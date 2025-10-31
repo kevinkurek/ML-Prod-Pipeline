@@ -13,15 +13,31 @@ VENV_DIR := .venv
 PYTHON   := $(VENV_DIR)/bin/python
 PIP      := $(VENV_DIR)/bin/pip
 
+# ---------- Image/ECR config ----------
+PLATFORM        ?= linux/amd64
+TRAINING_IMAGE  ?= condor-training
+INFERENCE_IMAGE ?= condor-inference
+FEATURES_IMAGE  ?= condor-features
+FEATURES_REPO   ?= condor-batch
+
 # EXPLANATION: default prefix for resource names (can be overridden in .env)
 # .PHONY EXPLANATION: make targets that are not files - without this, if a file named "build" existed, `make build` would think it's up to date and do nothing
 .PHONY: whoami ecr-login build push build-push bootstrap plan apply outputs destroy plan-destroy nuke-ecr setup prep-data env-check
 
 # EXPLANATION: check environment variables were loaded correctly
 env-check:
-	@echo "AWS_REGION=$(AWS_REGION)"
-	@echo "GITHUB_TOKEN set? $${GITHUB_TOKEN:+yes}${GITHUB_TOKEN:+" (length $$(( $${#GITHUB_TOKEN} )))"}"
-	@echo "AWS_PROFILE=$${AWS_PROFILE:-<none>}"
+	@set -e; \
+	ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region "$(AWS_REGION)"); \
+	echo "AWS_REGION=$(AWS_REGION)"; \
+	echo "GITHUB_TOKEN set? $${GITHUB_TOKEN:+yes}${GITHUB_TOKEN:+" (length $$(( $${#GITHUB_TOKEN} )))"}"; \
+	echo "AWS_PROFILE=$${AWS_PROFILE:-<none>}"; \
+	echo "TRAINING_IMAGE=$(TRAINING_IMAGE)"; \
+	echo "INFERENCE_IMAGE=$(INFERENCE_IMAGE)"; \
+	echo "FEATURES_IMAGE=$(FEATURES_IMAGE)"; \
+	echo "FEATURES_REPO=$(FEATURES_REPO)"; \
+	echo "TRAIN  = $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(TRAINING_IMAGE):latest"; \
+	echo "INFER  = $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(INFERENCE_IMAGE):latest"; \
+	echo "FEATURE= $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(FEATURES_REPO):latest"
 
 # EXPLANATION: setup python virtual environment and install dependencies
 setup:
@@ -46,23 +62,28 @@ ecr-login: whoami
 	echo "Using Account $$ACCOUNT_ID"; \
 	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com
 
-# EXPLANATION: build the Docker images for training and inference
+# EXPLANATION: build the Docker images for features, training, and inference
 build:
 	# Ensure amd64 images for SageMaker + consistent CI builds
-	docker build --platform linux/amd64 -t condor-training:latest services/training --load
-	docker build --platform linux/amd64 -t condor-inference:latest services/inference --load
+	docker build --platform $(PLATFORM) -t $(FEATURES_IMAGE):latest  services/features  --load
+	docker build --platform $(PLATFORM) -t $(TRAINING_IMAGE):latest  services/training  --load
+	docker build --platform $(PLATFORM) -t $(INFERENCE_IMAGE):latest services/inference --load
 
 # EXPLANATION: confirm ecr-login has been done, tag and push images to ECR
 # NOTE: make sure terraform apply has been run to create ECR repos before pushing
 push: ecr-login
-	@ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)); \
-	ECR_TRAINING=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-training:latest; \
-	ECR_INFERENCE=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-inference:latest; \
-	echo "Pushing to $$ECR_TRAINING and $$ECR_INFERENCE"; \
-	docker tag condor-training:latest  $$ECR_TRAINING; \
-	docker tag condor-inference:latest $$ECR_INFERENCE; \
-	docker push $$ECR_TRAINING; \
-	docker push $$ECR_INFERENCE
+	@set -e; \
+	ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)); \
+	ECR_TRAINING=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(TRAINING_IMAGE):latest; \
+	ECR_INFERENCE=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(INFERENCE_IMAGE):latest; \
+	ECR_FEATURES=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(FEATURES_REPO):latest; \
+	echo "Pushing:"; \
+	echo "  $(TRAINING_IMAGE):latest  -> $$ECR_TRAINING"; \
+	echo "  $(INFERENCE_IMAGE):latest -> $$ECR_INFERENCE"; \
+	echo "  $(FEATURES_IMAGE):latest  -> $$ECR_FEATURES"; \
+	docker tag $(TRAINING_IMAGE):latest  $$ECR_TRAINING;  docker push $$ECR_TRAINING; \
+	docker tag $(INFERENCE_IMAGE):latest $$ECR_INFERENCE; docker push $$ECR_INFERENCE; \
+	docker tag $(FEATURES_IMAGE):latest  $$ECR_FEATURES;  docker push $$ECR_FEATURES
 
 # EXPLANATION: build and push images in 1 step rather than individually
 build-push: build push
@@ -315,7 +336,7 @@ af-vars:
 	'	
 
 # --- Airflow: load Variables from Terraform outputs ---
-.PHONY: af-vars-from-tf-min af-vars-clear af-vars-show
+.PHONY: af-vars-from-tf-min af-vars-from-tf af-vars-clear af-vars-show
 
 # EXPLANATION: set Airflow Variables from Terraform outputs (minimal set for SageMaker training & inference)
 af-vars-from-tf-min:
@@ -346,10 +367,46 @@ af-vars-from-tf-min:
 	    airflow variables set ecs_sg_ids "[]" \
 	  '
 
+# EXPLANATION: set Airflow Variables from Terraform outputs (full set including networking info)
+af-vars-from-tf:
+	@cd infra/terraform && \
+	ROLE_ARN=$$(terraform output -raw sagemaker_role_arn) && \
+	DATA_BUCKET=$$(terraform output -raw data_bucket) && \
+	ART_BUCKET=$$(terraform output -raw artifacts_bucket) && \
+	ECS_CLUSTER=$$(terraform output -raw ecs_cluster_arn) && \
+	SUBNETS_JSON=$$(terraform output -json private_subnets) && \
+	SGS_JSON=$$(terraform output -json ecs_security_group_ids) && \
+	FEATURES_TD=$$(terraform output -raw features_task_def_arn) && \
+	ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region "$(AWS_REGION)") && \
+	TRAIN_IMAGE="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-training:latest" && \
+	INFER_IMAGE="$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-inference:latest" && \
+	echo "Setting Airflow Variables from Terraform and ECR…" && \
+	docker compose -f ../../airflow/docker-compose.yml exec \
+	  -e ROLE_ARN="$$ROLE_ARN" \
+	  -e DATA_BUCKET="$$DATA_BUCKET" \
+	  -e ART_BUCKET="$$ART_BUCKET" \
+	  -e ECS_CLUSTER="$$ECS_CLUSTER" \
+	  -e SUBNETS_JSON="$$SUBNETS_JSON" \
+	  -e SGS_JSON="$$SGS_JSON" \
+	  -e TRAIN_IMAGE="$$TRAIN_IMAGE" \
+	  -e INFER_IMAGE="$$INFER_IMAGE" \
+	  -e FEATURES_TD="$$FEATURES_TD" \
+	  airflow-apiserver bash -lc '\
+	    airflow variables set sagemaker_role_arn "$$ROLE_ARN" && \
+	    airflow variables set data_bucket "$$DATA_BUCKET" && \
+	    airflow variables set artifacts_bucket "$$ART_BUCKET" && \
+	    airflow variables set ecs_cluster_arn "$$ECS_CLUSTER" && \
+	    airflow variables set private_subnets "$$SUBNETS_JSON" && \
+	    airflow variables set ecs_sg_ids "$$SGS_JSON" && \
+	    airflow variables set training_image_uri "$$TRAIN_IMAGE" && \
+	    airflow variables set inference_image_uri "$$INFER_IMAGE" && \
+	    airflow variables set features_task_def_arn "$$FEATURES_TD" \
+	  '
+
 # EXPLANATION: show current Airflow Variables relevant to this project
 af-vars-show:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\
-	  for k in sagemaker_role_arn data_bucket artifacts_bucket ecs_cluster_arn private_subnets ecs_sg_ids training_image_uri inference_image_uri; do \
+	  for k in sagemaker_role_arn data_bucket artifacts_bucket ecs_cluster_arn private_subnets ecs_sg_ids training_image_uri inference_image_uri features_task_def_arn; do \
 	    v=$$(airflow variables get $$k 2>/dev/null || true); \
 	    if [ -n "$$v" ]; then echo "$$k=$$v"; else echo "$$k=<MISSING>"; fi; \
 	  done \
