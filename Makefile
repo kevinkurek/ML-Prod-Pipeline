@@ -1,7 +1,6 @@
 # Load .env but do NOT blindly export all keys (avoid overriding AWS creds)
 ifneq (,$(wildcard .env))
 include .env
-# Explicitly export only what you want
 export AWS_REGION GITHUB_TOKEN PREFIX AWS_PROFILE
 endif
 
@@ -14,37 +13,47 @@ VENV_DIR := .venv
 PYTHON   := $(VENV_DIR)/bin/python
 PIP      := $(VENV_DIR)/bin/pip
 
+# EXPLANATION: default prefix for resource names (can be overridden in .env)
+# .PHONY EXPLANATION: make targets that are not files - without this, if a file named "build" existed, `make build` would think it's up to date and do nothing
 .PHONY: whoami ecr-login build push build-push bootstrap plan apply outputs destroy plan-destroy nuke-ecr setup prep-data env-check
 
+# EXPLANATION: check environment variables were loaded correctly
 env-check:
 	@echo "AWS_REGION=$(AWS_REGION)"
 	@echo "GITHUB_TOKEN set? $${GITHUB_TOKEN:+yes}${GITHUB_TOKEN:+" (length $$(( $${#GITHUB_TOKEN} )))"}"
 	@echo "AWS_PROFILE=$${AWS_PROFILE:-<none>}"
 
+# EXPLANATION: setup python virtual environment and install dependencies
 setup:
 	python3 -m venv $(VENV_DIR)
 	$(PIP) install --upgrade pip
 	$(PIP) install -r requirements.txt
 
+# EXPLANATION: prepare data and upload to S3 bucket
 prep-data:
 	$(PYTHON) tools/prepare_data.py --bucket $$(cd infra/terraform && terraform output -raw data_bucket) --prefix features/ --min_rows 10000 --region $(AWS_REGION)
 
+# EXPLANATION: show the AWS identity being used
 whoami:
 	@echo "Profile: $${AWS_PROFILE:-<none>}  Region: $(AWS_REGION)"
 	aws sts get-caller-identity --region $(AWS_REGION)
 
 # ---- ECR: build & push images ----
+
+# EXPLANATION: login to ECR using AWS CLI
 ecr-login: whoami
 	@ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)); \
 	echo "Using Account $$ACCOUNT_ID"; \
 	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com
 
+# EXPLANATION: build the Docker images for training and inference
 build:
 	# Ensure amd64 images for SageMaker + consistent CI builds
 	docker build --platform linux/amd64 -t condor-training:latest services/training --load
 	docker build --platform linux/amd64 -t condor-inference:latest services/inference --load
 
-# make sure terraform apply has been run to create ECR repos before pushing
+# EXPLANATION: confirm ecr-login has been done, tag and push images to ECR
+# NOTE: make sure terraform apply has been run to create ECR repos before pushing
 push: ecr-login
 	@ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)); \
 	ECR_TRAINING=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/condor-training:latest; \
@@ -55,28 +64,38 @@ push: ecr-login
 	docker push $$ECR_TRAINING; \
 	docker push $$ECR_INFERENCE
 
+# EXPLANATION: build and push images in 1 step rather than individually
 build-push: build push
 
 # ---- Terraform lifecycle ----
+
+# EXPLANATION: setup terraform - download providers, initializing the backend, preparing the working directory
 bootstrap:
 	cd infra/terraform && terraform init -reconfigure
 
+# EXPLANATION: show what terraform will set up and/or change
 plan:
 	cd infra/terraform && terraform plan -var="prefix=$(PREFIX)" -var="region=$(AWS_REGION)"
 
+# EXPLANATION: apply the terraform changes (create/update infrastructure)
 apply:
 	cd infra/terraform && terraform apply -auto-approve -var="prefix=$(PREFIX)" -var="region=$(AWS_REGION)"
 
+# EXPLANATION: show the terraform outputs (e.g., bucket names, role ARNs)
 outputs:
 	cd infra/terraform && terraform output
 
+# EXPLANATION: show what terraform will destroy
 plan-destroy:
 	cd infra/terraform && terraform plan -destroy -var="prefix=$(PREFIX)" -var="region=$(AWS_REGION)"
 
+# EXPLANATION: destroy all terraform-managed infrastructure
 destroy:
 	cd infra/terraform && terraform destroy -auto-approve -var="prefix=$(PREFIX)" -var="region=$(AWS_REGION)"
 
 # ---- Helpers to clean ECR if needed before destroy ----
+
+# EXPLANATION: delete all ECR repositories in the region (force delete all images)
 nuke-ecr:
 	@repos=$$(aws ecr describe-repositories --region "$(AWS_REGION)" --query 'repositories[].repositoryName' --output text) ; \
 	if [ -z "$$repos" ]; then echo "No ECR repos"; else \
@@ -250,24 +269,26 @@ cost:
 # --- Airflow commands ---
 .PHONY: af-list af-errors af-render af-test af-shell af-vars af-var-set af-trigger
 
+
+# EXPLANATION: list all dags in Airflow
 af-list:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow dags list
 
+# EXPLANATION: list any import errors for dags in Airflow
 af-errors:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow dags list-import-errors || true
 
+# EXPLANATION: render a specific task instance in Airflow
 # usage: make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
 af-render:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow tasks render $(DAG) $(TASK) $(DS)
 
-# usage: make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+# EXPLANATION: test a specific task instance in Airflow
+# usage: make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26 - tests the "train" task of the "condor_ml_pipeline" dag for logical date 2025-10-26
 af-test:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver airflow tasks test $(DAG) $(TASK) $(DS)
 
-# af-trigger:
-# 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver \
-# 	  airflow dags trigger $(DAG) --conf '{}'
-
+# EXPLANATION: trigger a DAG run in Airflow for a specific logical date (or now if not specified)
 af-trigger:
 	@LD=$${DS:+$${DS}T00:00:00Z}; \
 	[ -n "$$LD" ] || LD=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
@@ -275,14 +296,11 @@ af-trigger:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver \
 	  airflow dags trigger "$(DAG)" --logical-date "$$LD" --conf '{}'
 
+# EXPLANATION: open a shell into the Airflow API server container
 af-shell:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash
 
-# generic setter
-af-var-set:
-	docker compose -f airflow/docker-compose.yml exec airflow-apiserver \
-	  airflow variables set $(K) "$(V)"
-
+# EXPLANATION: set dummy Airflow Variables for local testing
 af-vars:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\
 	airflow variables set sagemaker_role_arn "arn:aws:iam::123:role/dummy" && \
@@ -299,6 +317,7 @@ af-vars:
 # --- Airflow: load Variables from Terraform outputs ---
 .PHONY: af-vars-from-tf-min af-vars-clear af-vars-show
 
+# EXPLANATION: set Airflow Variables from Terraform outputs (minimal set for SageMaker training & inference)
 af-vars-from-tf-min:
 	@cd infra/terraform && \
 	ROLE_ARN=$$(terraform output -raw sagemaker_role_arn) && \
@@ -327,6 +346,7 @@ af-vars-from-tf-min:
 	    airflow variables set ecs_sg_ids "[]" \
 	  '
 
+# EXPLANATION: show current Airflow Variables relevant to this project
 af-vars-show:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\
 	  for k in sagemaker_role_arn data_bucket artifacts_bucket ecs_cluster_arn private_subnets ecs_sg_ids training_image_uri inference_image_uri; do \
@@ -335,7 +355,7 @@ af-vars-show:
 	  done \
 	'
 
-# if you need to clear out all previously set airflow variables
+# EXPLANATION: clear relevant Airflow Variables to start fresh
 af-vars-clear:
 	docker compose -f airflow/docker-compose.yml exec airflow-apiserver bash -lc '\
 	  for k in sagemaker_role_arn data_bucket artifacts_bucket ecs_cluster_arn \

@@ -9,10 +9,14 @@ This is a **code-first** starter to deploy a minimal ML pipeline on AWS using:
 - **ECR, S3, CloudWatch, IAM**
 
 ## Airflow XGBoost SageMaker Training & API Endpoint Deployment
-![alt text](image-2.png)
+![alt text](images/image-2.png)
 
-**Smoke-test of resulting API Endpoint**
-![alt text](image-3.png)
+## Auto-promotion capabilites via SageMaker Model Registry
+![alt text](images/image.png)
+
+## Smoke-test of resulting API Endpoint
+
+![alt text](images/image-3.png)
 
 ## Quick Start
 The Makefile has automated a ton of the build steps.
@@ -133,11 +137,48 @@ $ make down
 ml-prod-pipeline/
 ├─ infra/terraform/    # IaC (Terraform)
 ├─ services/           # Dockerized services (training/inference/batch)
-├─ airflow/            # MWAA DAGs and plugins
+├─ airflow/            # Local Airflow DAGs and plugins
 ├─ sagemaker/          # Optional SageMaker pipeline/registry helpers
 ├─ Makefile            # Convenience targets
 └─ docker-compose.yml  # Local dev (optional)
 ```
+
+## Run a Local Airflow Render, Test, Debug, & Trigger
+```bash
+# make sure images are already pushed to ECR
+make build-push
+
+# confirm some data is in the bucket
+make prep-data
+
+# clear out any fake or temp vars that might be hanging in airflow
+$ make af-vars-clear
+
+# set airflow variables from terraform generated values 
+$ make af-vars-from-tf-min
+
+# show what was set
+$ make af-vars-show
+
+# show a local render of 1 task (train) inside the condor_ml_pipeline DAG
+$ make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+
+# do a local docker test of 1 task (train) inside the condor_ml_pipeline DAG
+$ make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+
+# do a debug session inside AF (can see in UI)
+$ make af-shell
+python dags/condor_pipeline.py
+>>
+  DagRun Finished - SageMaker Endpoint Deployed
+
+# trigger the actual DAG (which you can see in the UI)
+$ make af-trigger DAG=condor_ml_pipeline
+
+# send a smoke-test to the deployed endpoint
+$ make sm-smoke-test
+```
+
 
 ## Terraform commands
 ```bash
@@ -462,37 +503,4 @@ docker compose exec airflow-apiserver airflow dags list-import-errors
 
 # list all DAGs (examples will be there too)
 docker compose exec airflow-apiserver airflow dags list | grep -i condor
-```
-
-## Run a real local airflow render & test
-```bash
-# make sure images are already pushed to ECR
-make build-push
-
-# confirm some data is in the bucket
-make prep-data
-
-# clear out any fake or temp vars that might be hanging in airflow
-$ make af-vars-clear
-
-# set airflow variables from terraform generated values 
-$ make af-vars-from-tf-min
-
-# show what was set
-$ make af-vars-show
-
-# show a local render
-make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
-
-# do a local docker test
-make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
-
-# do a debug session inside AF (can see in UI)
-make af-shell
-python dags/condor_pipeline.py
->>
-  DagRun Finished - SageMaker Endpoint Deployed
-
-# trigger the actual DAG (which you can see in the UI)
-make af-trigger DAG=condor_ml_pipeline
 ```

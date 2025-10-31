@@ -12,6 +12,7 @@ from airflow.providers.standard.operators.python import PythonOperator
 from airflow.providers.standard.operators.empty import EmptyOperator
 import json
 from airflow.models import Variable
+from botocore.exceptions import ClientError
 
 default_args = {"owner": "ml", "retries": 0}
 
@@ -53,7 +54,7 @@ with DAG(
     else:
         build_features = EmptyOperator(task_id="build_features_skip")
 
-    training_job_name = "condor-xgb-{{ ds }}"
+    training_job_name = "condor-xgb-{{ ts_nodash }}"
 
     sm_train = SageMakerTrainingOperator(
         task_id="train",
@@ -87,6 +88,7 @@ with DAG(
         aws_conn_id="aws_default",
     )
 
+    # EXPLANATION: custom PythonOperator to grab the S3 URL of trained model artifacts from completed training job
     def grab_model_data_url(**context):
         import boto3, os
         sm = boto3.client("sagemaker", region_name=os.getenv("AWS_REGION", "us-west-2"))
@@ -100,24 +102,74 @@ with DAG(
         templates_dict={"job_name": training_job_name},
     )
 
+    # EXPLANATION: manual retrieve the S3 URL of the trained model artifacts from the completed training job
+    # create_model = SageMakerModelOperator(
+    #     task_id="create_model",
+    #     config={
+    #         "ModelName": training_job_name,
+    #         "PrimaryContainer": {
+    #             "Image": INFER_IMG,
+    #             "ModelDataUrl": "{{ ti.xcom_pull(task_ids='get_model_data', key='model_data_url') }}",
+    #             "Mode": "SingleModel",
+    #         },
+    #         "ExecutionRoleArn": ROLE_ARN,
+    #     },
+    #     aws_conn_id="aws_default",
+    # )
+
+    # EXPLANATION: register the trained model into SageMaker Model Registry and pick the latest Approved version
+    def register_and_pick_model(**ctx):
+        import boto3, os
+        sm = boto3.client("sagemaker", region_name=os.getenv("AWS_REGION","us-west-2"))
+        group = "condor-xgb"
+
+        # idempotent: create or ignore if exists
+        try:
+            sm.create_model_package_group(ModelPackageGroupName=group)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code")
+            msg  = e.response.get("Error", {}).get("Message", "")
+            if not (code == "ValidationException" and "already exists" in msg):
+                raise
+
+        # get model data from prior task
+        model_data = ctx["ti"].xcom_pull(task_ids="get_model_data", key="model_data_url")
+
+        # register this training output
+        pkg = sm.create_model_package(
+            ModelPackageGroupName=group,
+            InferenceSpecification={"Containers":[{"Image": INFER_IMG, "ModelDataUrl": model_data}]},
+            ModelApprovalStatus="Approved",  # or "PendingManualApproval"
+        )
+        this_pkg_arn = pkg["ModelPackageArn"]
+
+        # pick latest Approved (fallback to this one)
+        resp = sm.list_model_packages(
+            ModelPackageGroupName=group,
+            ModelApprovalStatus="Approved",
+            SortBy="CreationTime", SortOrder="Descending", MaxResults=1,
+        )
+        latest = resp["ModelPackageSummaryList"][0]["ModelPackageArn"] if resp.get("ModelPackageSummaryList") else this_pkg_arn
+
+        ctx["ti"].xcom_push(key="model_package_arn", value=this_pkg_arn)
+        ctx["ti"].xcom_push(key="approved_pkg_arn", value=latest)
+
+    register_model = PythonOperator(task_id="register_model", python_callable=register_and_pick_model)
+
     create_model = SageMakerModelOperator(
-        task_id="create_model",
-        config={
-            "ModelName": training_job_name,
-            "PrimaryContainer": {
-                "Image": INFER_IMG,
-                "ModelDataUrl": "{{ ti.xcom_pull(task_ids='get_model_data', key='model_data_url') }}",
-                "Mode": "SingleModel",
-            },
-            "ExecutionRoleArn": ROLE_ARN,
-        },
-        aws_conn_id="aws_default",
+    task_id="create_model",
+    config={
+        "ModelName": training_job_name,
+        "Containers": [ { "ModelPackageName": "{{ ti.xcom_pull('register_model', key='approved_pkg_arn') }}" } ],
+        "ExecutionRoleArn": ROLE_ARN,
+    },
+    aws_conn_id="aws_default",
     )
 
     create_cfg = SageMakerEndpointConfigOperator(
         task_id="create_cfg",
         config={
-            "EndpointConfigName": "condor-xgb-cfg-{{ ds }}",
+            "EndpointConfigName": "condor-xgb-cfg-{{ ts_nodash }}",
             "ProductionVariants": [{
                 "ModelName": training_job_name,
                 "VariantName": "AllTraffic",
@@ -131,7 +183,7 @@ with DAG(
         task_id="deploy",
         config={
             "EndpointName": "condor-xgb",
-            "EndpointConfigName": "condor-xgb-cfg-{{ ds }}",
+            "EndpointConfigName": "condor-xgb-cfg-{{ ts_nodash }}",
         },
         wait_for_completion=True,
         check_interval=30,
@@ -146,7 +198,12 @@ with DAG(
         aws_conn_id="aws_default",
     )
 
-    build_features >> sm_train >> get_model_data >> create_model >> create_cfg >> deploy >> health
+    # EXPLANATION: define task dependencies for simple workflow
+    # build_features >> sm_train >> get_model_data >> create_model >> create_cfg >> deploy >> health
+
+    # EXPLANATION: define task dependencies for auto-promotion workflow
+    build_features >> sm_train >> get_model_data >> register_model >> create_model >> create_cfg >> deploy >> health
+
 
 if __name__ == "__main__":
     dag.test()
