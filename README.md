@@ -544,3 +544,13 @@ docker compose exec airflow-apiserver airflow dags list-import-errors
 # list all DAGs (examples will be there too)
 docker compose exec airflow-apiserver airflow dags list | grep -i condor
 ```
+
+## MWAA helpful commands & checks
+```bash
+# sync local airflow/dags with mwaa_source_bucket (SRC_BUCKET) in this example
+aws s3 sync airflow/dags "s3://${SRC_BUCKET}/dags" --delete --exclude "__pycache__/*" --exclude "*.pyc"
+aws s3 ls "s3://${SRC_BUCKET}/dags/"
+>>
+  2025-11-02 14:37:43       8042 condor_pipeline.py
+  2025-11-02 14:37:43        912 test.py
+```

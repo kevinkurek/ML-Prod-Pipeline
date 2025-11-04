@@ -421,3 +421,54 @@ af-vars-clear:
 	    airflow variables delete $$k || true; \
 	  done \
 	'
+
+# --- Managed Workflow for Apache Airflow (MWAA) deployment ---
+.PHONY: mwaa-policy-arn mwaa-bucket mwaa-sync-dags mwaa-sync-plugins mwaa-sync-reqs mwaa-sync
+
+# --- MWAA: get the ARN of the managed policy for MWAA execution role
+mwaa-policy-arn:
+	@echo "Fetching AmazonMWAAServiceRolePolicy ARN..."
+	@aws iam list-policies --scope AWS \
+	  --query 'Policies[?PolicyName==`AmazonMWAAServiceRolePolicy`].Arn' \
+	  --output text
+
+# --- MWAA: discover bucket name quickly
+mwaa-bucket:
+	@cd infra/terraform && terraform output -raw mwaa_source_bucket
+
+# --- MWAA: sync only the DAGs folder
+mwaa-sync-dags:
+	@set -e; \
+	BKT=$$(cd infra/terraform && terraform output -raw mwaa_source_bucket); \
+	echo "Syncing DAGs to s3://$$BKT/dags"; \
+	aws s3 sync airflow/dags s3://$$BKT/dags \
+	  --delete \
+	  --exclude "__pycache__/*" --exclude "*.pyc" --exclude "*.pyo"
+
+# --- MWAA: sync only plugins (optional)
+mwaa-sync-plugins:
+	@set -e; \
+	BKT=$$(cd infra/terraform && terraform output -raw mwaa_source_bucket); \
+	if [ -d airflow/plugins ]; then \
+	  echo "Syncing plugins to s3://$$BKT/plugins"; \
+	  aws s3 sync airflow/plugins s3://$$BKT/plugins \
+	    --delete \
+	    --exclude "__pycache__/*" --exclude "*.pyc" --exclude "*.pyo"; \
+	else \
+	  echo "No airflow/plugins directory, skipping"; \
+	fi
+
+# --- MWAA: upload Python requirements
+mwaa-sync-reqs:
+	@set -e; \
+	BKT=$$(cd infra/terraform && terraform output -raw mwaa_source_bucket); \
+	if [ -f airflow/requirements.txt ]; then \
+	  echo "Uploading requirements.txt to s3://$$BKT/requirements/requirements.txt"; \
+	  aws s3 cp airflow/requirements.txt s3://$$BKT/requirements/requirements.txt; \
+	else \
+	  echo "No airflow/requirements.txt, skipping"; \
+	fi
+
+# --- MWAA: sync everything needed (DAGs + plugins + requirements)
+mwaa-sync: mwaa-sync-dags mwaa-sync-plugins mwaa-sync-reqs
+	@echo "✅ MWAA source bucket updated."

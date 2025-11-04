@@ -1,12 +1,21 @@
 variable "prefix" {
-  type = string
+  description = "Prefix for resource names (e.g. condor, ml-prod-pipeline)"
+  type        = string
 }
 
 variable "region" {
-  type = string
+  description = "AWS region to deploy resources in"
+  type        = string
 }
 
 variable "profile" {
-  type    = string
-  default = "kevin_sandbox"
+  description = "AWS CLI profile to use for authentication"
+  type        = string
+  default     = "kevin_sandbox"
+}
+
+variable "tags" {
+  description = "Default tags to apply to all resources"
+  type        = map(string)
+  default     = {}
 }
