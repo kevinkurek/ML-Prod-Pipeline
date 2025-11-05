@@ -148,7 +148,7 @@ sm-train:
 	  --algorithm-specification TrainingImage="$$TRAIN_IMAGE",TrainingInputMode=File \
 	  --input-data-config "$$(printf '[{"ChannelName":"train","DataSource":{"S3DataSource":{"S3Uri":"s3://%s/features/","S3DataType":"S3Prefix","S3DataDistributionType":"FullyReplicated"}}}]' $$DATA_BUCKET)" \
 	  --output-data-config S3OutputPath="s3://$$ART_BUCKET/models/" \
-	  --resource-config InstanceType=ml.m5.large,InstanceCount=1,VolumeSizeInGB=10 \
+	  --resource-config InstanceType=ml.t3.large,InstanceCount=1,VolumeSizeInGB=10 \
 	  --stopping-condition MaxRuntimeInSeconds=900,MaxWaitTimeInSeconds=1800 \
 	  --enable-managed-spot-training \
 	  --checkpoint-config S3Uri="s3://$$ART_BUCKET/checkpoints/",LocalPath="/opt/ml/checkpoints"; \

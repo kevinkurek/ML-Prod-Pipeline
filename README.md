@@ -48,7 +48,7 @@ $ make env-check
   # displays cred output
 
 # 3. Set up terraform resources - VPC, ECR, ECS, etc.
-$ make boostrap
+$ make bootstrap
 >> initializes terraform
 
 $ make plan
