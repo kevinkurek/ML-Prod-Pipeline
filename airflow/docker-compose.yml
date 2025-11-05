@@ -4,7 +4,11 @@ x-airflow-common:
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
   image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.1.0}
-  # build: .
+
+  # read in root project .env file
+  env_file:
+    - ../.env
+
   environment:
     &airflow-common-env
     AIRFLOW_UID: "${AIRFLOW_UID:-50000}"
@@ -29,17 +33,11 @@ x-airflow-common:
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
     PYTHONWARNINGS: "ignore:.*airflow.security.permissions.*:DeprecationWarning"
-    AWS_REGION: "us-west-2"
-    AWS_PROFILE: "kevin_sandbox"
-    # robust: tell boto3 where the files are (works regardless of $HOME)
-    AWS_SHARED_CREDENTIALS_FILE: "/home/airflow/.aws/credentials"
-    AWS_CONFIG_FILE: "/home/airflow/.aws/config"
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ~/.aws:/home/airflow/.aws:ro
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on

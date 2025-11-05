@@ -18,7 +18,7 @@ PLATFORM        ?= linux/amd64
 TRAINING_IMAGE  ?= condor-training
 INFERENCE_IMAGE ?= condor-inference
 FEATURES_IMAGE  ?= condor-features
-FEATURES_REPO   ?= condor-batch
+BATCH_REPO      ?= condor-batch
 
 # EXPLANATION: default prefix for resource names (can be overridden in .env)
 # .PHONY EXPLANATION: make targets that are not files - without this, if a file named "build" existed, `make build` would think it's up to date and do nothing
@@ -34,10 +34,11 @@ env-check:
 	echo "TRAINING_IMAGE=$(TRAINING_IMAGE)"; \
 	echo "INFERENCE_IMAGE=$(INFERENCE_IMAGE)"; \
 	echo "FEATURES_IMAGE=$(FEATURES_IMAGE)"; \
-	echo "FEATURES_REPO=$(FEATURES_REPO)"; \
+	echo "BATCH_REPO=$(BATCH_REPO)"; \
 	echo "TRAIN  = $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(TRAINING_IMAGE):latest"; \
 	echo "INFER  = $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(INFERENCE_IMAGE):latest"; \
-	echo "FEATURE= $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(FEATURES_REPO):latest"
+	echo "FEATURE= $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(FEATURES_IMAGE):latest"; \
+	echo "BATCH  = $$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(BATCH_REPO):latest"
 
 # EXPLANATION: setup python virtual environment and install dependencies
 setup:
@@ -68,6 +69,7 @@ build:
 	docker build --platform $(PLATFORM) -t $(FEATURES_IMAGE):latest  services/features  --load
 	docker build --platform $(PLATFORM) -t $(TRAINING_IMAGE):latest  services/training  --load
 	docker build --platform $(PLATFORM) -t $(INFERENCE_IMAGE):latest services/inference --load
+	docker build --platform $(PLATFORM) -t $(BATCH_REPO):latest services/batch --load
 
 # EXPLANATION: confirm ecr-login has been done, tag and push images to ECR
 # NOTE: make sure terraform apply has been run to create ECR repos before pushing
@@ -76,14 +78,17 @@ push: ecr-login
 	ACCOUNT_ID=$$(aws sts get-caller-identity --query Account --output text --region $(AWS_REGION)); \
 	ECR_TRAINING=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(TRAINING_IMAGE):latest; \
 	ECR_INFERENCE=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(INFERENCE_IMAGE):latest; \
-	ECR_FEATURES=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(FEATURES_REPO):latest; \
+	ECR_FEATURES=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(FEATURES_IMAGE):latest; \
+	ECR_BATCH=$$ACCOUNT_ID.dkr.ecr.$(AWS_REGION).amazonaws.com/$(BATCH_REPO):latest; \
 	echo "Pushing:"; \
 	echo "  $(TRAINING_IMAGE):latest  -> $$ECR_TRAINING"; \
 	echo "  $(INFERENCE_IMAGE):latest -> $$ECR_INFERENCE"; \
 	echo "  $(FEATURES_IMAGE):latest  -> $$ECR_FEATURES"; \
+	echo "  $(BATCH_REPO):latest      -> $$ECR_BATCH"; \
 	docker tag $(TRAINING_IMAGE):latest  $$ECR_TRAINING;  docker push $$ECR_TRAINING; \
 	docker tag $(INFERENCE_IMAGE):latest $$ECR_INFERENCE; docker push $$ECR_INFERENCE; \
-	docker tag $(FEATURES_IMAGE):latest  $$ECR_FEATURES;  docker push $$ECR_FEATURES
+	docker tag $(FEATURES_IMAGE):latest  $$ECR_FEATURES;  docker push $$ECR_FEATURES; \
+	docker tag $(BATCH_REPO):latest      $$ECR_BATCH;      docker push $$ECR_BATCH;
 
 # EXPLANATION: build and push images in 1 step rather than individually
 build-push: build push

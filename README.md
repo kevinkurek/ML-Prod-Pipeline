@@ -5,20 +5,20 @@ This is a **code-only** deployment of a production end-to-end machine learning p
 - **Github Actions (CI/CD)** - Auto-deployment of images to ECR on successful main branch commit
 - **Docker + ECS (Fargate first, EC2-ready)**
 - **SageMaker** for training/hosting
-- **MWAA (managed Airflow) & Local Docker Airflow** for orchestration
+- **Docker Airflow & MWAA (AWS Managed Airflow)** for orchestration
 
 ## Airflow XGBoost SageMaker Training & API Endpoint Deployment
-![alt text](images/image-2.png)
+![alt text](README_images/image-2.png)
 
 ## ECS feature builds & SageMaker auto-promotion capabilites via SageMaker Model Registry
-![alt text](images/image_af_ecs_success.png)
+![alt text](README_images/image_af_ecs_success.png)
 
 ## Github Actions auto docker image build & push to ECR on successful main branch commit
-![alt text](images/image_gh.png)
+![alt text](README_images/image_gh.png)
 
 ## Smoke-test of resulting API Endpoint
 
-![alt text](images/image-3.png)
+![alt text](README_images/image-3.png)
 
 ## Quick Start
 The Makefile has automated a ton of the build steps.
@@ -29,12 +29,7 @@ $ make setup
 >>
   (.venv folder now in root directory)
 
-# 2a. Run AWS configure to set up the AWS IAM user
-$ aws configure
->>
-  (Follow prompts)
-
-# 2b. set a .env folder at root folder level
+# 2. set a .env folder at root folder level
 $ cd ml-prod-pipeline
 $ touch .env
 $ nano .env
@@ -42,10 +37,15 @@ $ nano .env
   # fill in
   # AWS_ACCESS_KEY=xxxxxx
   # AWS_SECRET_ACCESS_KEY=xxxxxx
-  # AWS_PROFILE=kevin_xxxx (this is a unique IAM User that has admin privileges in AWS)
+  # AWS_PROFILE=kevin_xxxx (this is a temp IAM User with admin privileges in AWS)
   # AWS_REGION=us-west-x
   # PREFIX=condor
   # GITHUB_TOKEN=ghp_xxxxxxx
+
+# quick spot-check creds were set correctly
+$ make env-check
+>>
+  # displays cred output
 
 # 3. Set up terraform resources - VPC, ECR, ECS, etc.
 $ make boostrap
@@ -131,7 +131,49 @@ $ make down
 >>
   Deleting SageMaker endpoint: condor-xgb
   ...
-  Destroy complete! Resources: 32 destroyed.
+  Destroy complete! Resources: 42 destroyed.
+```
+
+## Run a Local Airflow Render, Test, Debug, & Trigger
+```bash
+# Make sure steps 1-4 from Quick Start are done first!
+
+## Setup Airflow Docker Env
+$ cd airflow
+$ docker compose up -d
+$ docker compose exec airflow-apiserver env | grep -E 'AWS_|PREFIX|GITHUB_TOKEN'
+>> 
+  confirms root credentials were set in Airflow
+
+# confirm some data is in the bucket
+$ make prep-data
+
+# clear out any fake or temp vars that might be hanging in airflow
+$ make af-vars-clear
+
+# set airflow variables from terraform generated values 
+$ make af-vars-from-tf-min
+
+# show what was set
+$ make af-vars-show
+
+# show a local render of 1 task (train) inside the condor_ml_pipeline DAG
+$ make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+
+# do a local docker test of 1 task (train) inside the condor_ml_pipeline DAG
+$ make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
+
+# do a debug session inside AF (can see in UI)
+$ make af-shell
+python dags/condor_pipeline.py
+>>
+  DagRun Finished - SageMaker Endpoint Deployed
+
+# trigger the actual DAG (which you can see in the UI)
+$ make af-trigger DAG=condor_ml_pipeline
+
+# send a smoke-test to the deployed endpoint
+$ make sm-smoke-test
 ```
 
 ## Repo Layout
@@ -181,42 +223,6 @@ $ make down
 │       └── train.py
 └── tools
     └── prepare_data.py
-```
-
-## Run a Local Airflow Render, Test, Debug, & Trigger
-```bash
-# make sure images are already pushed to ECR
-make build-push
-
-# confirm some data is in the bucket
-make prep-data
-
-# clear out any fake or temp vars that might be hanging in airflow
-$ make af-vars-clear
-
-# set airflow variables from terraform generated values 
-$ make af-vars-from-tf-min
-
-# show what was set
-$ make af-vars-show
-
-# show a local render of 1 task (train) inside the condor_ml_pipeline DAG
-$ make af-render DAG=condor_ml_pipeline TASK=train DS=2025-10-26
-
-# do a local docker test of 1 task (train) inside the condor_ml_pipeline DAG
-$ make af-test DAG=condor_ml_pipeline TASK=train DS=2025-10-26
-
-# do a debug session inside AF (can see in UI)
-$ make af-shell
-python dags/condor_pipeline.py
->>
-  DagRun Finished - SageMaker Endpoint Deployed
-
-# trigger the actual DAG (which you can see in the UI)
-$ make af-trigger DAG=condor_ml_pipeline
-
-# send a smoke-test to the deployed endpoint
-$ make sm-smoke-test
 ```
 
 
@@ -493,12 +499,6 @@ aws ce get-cost-and-usage \
   2.2969
 ```
 
-## Local Airflow Dev
-```bash
-cd airflow
-docker compose up -d
-```
-
 ## Makefile Helpers
 ```bash
 make af-list                # list all airflow dags
@@ -663,5 +663,194 @@ Manually updated policy during MWAA creation for IAM role AmazonMWAA-condor-mwaa
       }
     }
   ]
+}
+```
+
+
+## Working Trust Relationship
+```bash
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "airflow.amazonaws.com",
+                    "airflow-env.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+```
+
+## Working Policy
+```bash
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "airflow:PublishMetrics",
+            "Resource": "arn:aws:airflow:us-west-2:<ACCOUNT_ID>:environment/condor-mwaa"
+        },
+        {
+            "Sid": "AllowAccountPABCheck",
+            "Effect": "Allow",
+            "Action": "s3:GetAccountPublicAccessBlock",
+            "Resource": "*"
+        },
+        {
+            "Sid": "AllowBucketPABCheck",
+            "Effect": "Allow",
+            "Action": "s3:GetBucketPublicAccessBlock",
+            "Resource": [
+                "arn:aws:s3:::condor-mwaa-bucket",
+                "arn:aws:s3:::condor-data-bucket",
+                "arn:aws:s3:::condor-artifacts-bucket"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogStream",
+                "logs:CreateLogGroup",
+                "logs:PutLogEvents",
+                "logs:GetLogEvents",
+                "logs:GetLogRecord",
+                "logs:GetLogGroupFields",
+                "logs:GetQueryResults",
+                "logs:DescribeLogGroups"
+            ],
+            "Resource": [
+                "arn:aws:logs:us-west-2:<ACCOUNT_ID>:log-group:airflow-condor-mwaa-*",
+                "arn:aws:logs:us-west-2:<ACCOUNT_ID>:log-group:*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": "cloudwatch:PutMetricData",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+                "sqs:SendMessage"
+            ],
+            "Resource": "arn:aws:sqs:us-west-2:*:airflow-celery-*"
+        },
+        {
+            "Sid": "ListDagBucket",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation",
+                "s3:GetBucketVersioning"
+            ],
+            "Resource": "arn:aws:s3:::condor-mwaa-bucket",
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        "dags/*",
+                        "plugins/*",
+                        "requirements.txt"
+                    ]
+                }
+            }
+        },
+        {
+            "Sid": "ReadDagObjects",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion"
+            ],
+            "Resource": [
+                "arn:aws:s3:::condor-mwaa-bucket/dags/*",
+                "arn:aws:s3:::condor-mwaa-bucket/plugins/*",
+                "arn:aws:s3:::condor-mwaa-bucket/requirements.txt"
+            ]
+        },
+        {
+            "Sid": "ListDataArtifactBuckets",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": [
+                "arn:aws:s3:::condor-data-bucket",
+                "arn:aws:s3:::condor-artifacts-bucket"
+            ]
+        },
+        {
+            "Sid": "RWDataArtifactObjects",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:PutObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::condor-data-bucket/*",
+                "arn:aws:s3:::condor-artifacts-bucket/*"
+            ]
+        },
+        {
+            "Sid": "SageMakerPipeline",
+            "Effect": "Allow",
+            "Action": [
+                "sagemaker:CreateTrainingJob",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:CreateModel",
+                "sagemaker:DescribeModel",
+                "sagemaker:CreateModelPackageGroup",
+                "sagemaker:CreateModelPackage",
+                "sagemaker:ListModelPackages",
+                "sagemaker:CreateEndpointConfig",
+                "sagemaker:CreateEndpoint",
+                "sagemaker:UpdateEndpoint",
+                "sagemaker:DescribeEndpoint"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EcsRunTask",
+            "Effect": "Allow",
+            "Action": [
+                "ecs:RunTask",
+                "ecs:DescribeTasks",
+                "ecs:StopTask",
+                "ecs:DescribeClusters",
+                "ecs:DescribeTaskDefinition"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "AllowPassRoles",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": [
+                "arn:aws:iam::<ACCOUNT_ID>:role/condor-sagemaker-exec-role",
+                "arn:aws:iam::<ACCOUNT_ID>:role/condor-ecs-task-role",
+                "arn:aws:iam::<ACCOUNT_ID>:role/condor-ecs-task-exec-role"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "iam:PassedToService": [
+                        "sagemaker.amazonaws.com",
+                        "ecs-tasks.amazonaws.com"
+                    ]
+                }
+            }
+        }
+    ]
 }
 ```

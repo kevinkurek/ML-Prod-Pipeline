@@ -26,7 +26,7 @@ module "s3" {
 
 module "ecr" {
   source       = "./modules/ecr"
-  repositories = ["condor-training", "condor-inference", "condor-batch"]
+  repositories = ["condor-training", "condor-inference", "condor-features", "condor-batch"]
 }
 
 # Minimal ECS cluster (capacity providers can be added later)
