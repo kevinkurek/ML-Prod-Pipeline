@@ -544,3 +544,124 @@ docker compose exec airflow-apiserver airflow dags list-import-errors
 # list all DAGs (examples will be there too)
 docker compose exec airflow-apiserver airflow dags list | grep -i condor
 ```
+
+## MWAA Execution Policy
+Manually updated policy during MWAA creation for IAM role AmazonMWAA-condor-mwaa-J inside policy MWAA-Execution-Policy-5c07xxxxxx.
+```bash
+# Policy MWAA-Execution-Policy-5c07xxxxxx
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "airflow:PublishMetrics",
+      "Resource": "arn:aws:airflow:us-west-2:<ACCOUNT_ID>:environment/condor-mwaa"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream","logs:CreateLogGroup","logs:PutLogEvents",
+        "logs:GetLogEvents","logs:GetLogRecord","logs:GetLogGroupFields",
+        "logs:GetQueryResults","logs:DescribeLogGroups"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-west-2:<ACCOUNT_ID>:log-group:airflow-condor-mwaa-*",
+        "arn:aws:logs:us-west-2:<ACCOUNT_ID>:log-group:*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sqs:ChangeMessageVisibility","sqs:DeleteMessage","sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl","sqs:ReceiveMessage","sqs:SendMessage"
+      ],
+      "Resource": "arn:aws:sqs:us-west-2:*:airflow-celery-*"
+    },
+
+    {
+      "Sid": "ListDagBucket",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket","s3:GetBucketLocation","s3:GetBucketVersioning"],
+      "Resource": "arn:aws:s3:::condor-mwaa-bucket",
+      "Condition": { "StringLike": { "s3:prefix": ["dags/*","plugins/*","requirements.txt"] } }
+    },
+    {
+      "Sid": "ReadDagObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject","s3:GetObjectVersion"],
+      "Resource": [
+        "arn:aws:s3:::condor-mwaa-bucket/dags/*",
+        "arn:aws:s3:::condor-mwaa-bucket/plugins/*",
+        "arn:aws:s3:::condor-mwaa-bucket/requirements.txt"
+      ]
+    },
+
+    {
+      "Sid": "ListDataArtifactBuckets",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket","s3:GetBucketLocation"],
+      "Resource": [
+        "arn:aws:s3:::condor-data-bucket",
+        "arn:aws:s3:::condor-artifacts-bucket"
+      ]
+    },
+    {
+      "Sid": "RWDataArtifactObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject","s3:GetObjectVersion","s3:PutObject"],
+      "Resource": [
+        "arn:aws:s3:::condor-data-bucket/*",
+        "arn:aws:s3:::condor-artifacts-bucket/*"
+      ]
+    },
+
+    {
+      "Sid": "SageMakerPipeline",
+      "Effect": "Allow",
+      "Action": [
+        "sagemaker:CreateTrainingJob","sagemaker:DescribeTrainingJob",
+        "sagemaker:CreateModel","sagemaker:DescribeModel",
+        "sagemaker:CreateModelPackageGroup","sagemaker:CreateModelPackage",
+        "sagemaker:ListModelPackages",
+        "sagemaker:CreateEndpointConfig","sagemaker:CreateEndpoint",
+        "sagemaker:UpdateEndpoint","sagemaker:DescribeEndpoint"
+      ],
+      "Resource": "*"
+    },
+
+    {
+      "Sid": "EcsRunTask",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RunTask","ecs:DescribeTasks","ecs:StopTask",
+        "ecs:DescribeClusters","ecs:DescribeTaskDefinition"
+      ],
+      "Resource": "*"
+    },
+
+    {
+      "Sid": "AllowPassRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::<ACCOUNT_ID>:role/condor-sagemaker-exec-role",
+        "arn:aws:iam::<ACCOUNT_ID>:role/condor-ecs-task-role",
+        "arn:aws:iam::<ACCOUNT_ID>:role/condor-ecs-task-exec-role"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "sagemaker.amazonaws.com",
+            "ecs-tasks.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}
+```
