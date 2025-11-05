@@ -554,3 +554,191 @@ aws s3 ls "s3://${SRC_BUCKET}/dags/"
   2025-11-02 14:37:43       8042 condor_pipeline.py
   2025-11-02 14:37:43        912 test.py
 ```
+
+## Working Trust Relationship
+```bash
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "airflow.amazonaws.com",
+                    "airflow-env.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+```
+
+## Working Policy
+```bash
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "airflow:PublishMetrics",
+            "Resource": "arn:aws:airflow:us-west-2:177024578536:environment/condor-mwaa"
+        },
+        {
+            "Sid": "AllowAccountPABCheck",
+            "Effect": "Allow",
+            "Action": "s3:GetAccountPublicAccessBlock",
+            "Resource": "*"
+        },
+        {
+            "Sid": "AllowBucketPABCheck",
+            "Effect": "Allow",
+            "Action": "s3:GetBucketPublicAccessBlock",
+            "Resource": [
+                "arn:aws:s3:::condor-mwaa-bucket",
+                "arn:aws:s3:::condor-data-bucket",
+                "arn:aws:s3:::condor-artifacts-bucket"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogStream",
+                "logs:CreateLogGroup",
+                "logs:PutLogEvents",
+                "logs:GetLogEvents",
+                "logs:GetLogRecord",
+                "logs:GetLogGroupFields",
+                "logs:GetQueryResults",
+                "logs:DescribeLogGroups"
+            ],
+            "Resource": [
+                "arn:aws:logs:us-west-2:177024578536:log-group:airflow-condor-mwaa-*",
+                "arn:aws:logs:us-west-2:177024578536:log-group:*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": "cloudwatch:PutMetricData",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:ReceiveMessage",
+                "sqs:SendMessage"
+            ],
+            "Resource": "arn:aws:sqs:us-west-2:*:airflow-celery-*"
+        },
+        {
+            "Sid": "ListDagBucket",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation",
+                "s3:GetBucketVersioning"
+            ],
+            "Resource": "arn:aws:s3:::condor-mwaa-bucket",
+            "Condition": {
+                "StringLike": {
+                    "s3:prefix": [
+                        "dags/*",
+                        "plugins/*",
+                        "requirements.txt"
+                    ]
+                }
+            }
+        },
+        {
+            "Sid": "ReadDagObjects",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion"
+            ],
+            "Resource": [
+                "arn:aws:s3:::condor-mwaa-bucket/dags/*",
+                "arn:aws:s3:::condor-mwaa-bucket/plugins/*",
+                "arn:aws:s3:::condor-mwaa-bucket/requirements.txt"
+            ]
+        },
+        {
+            "Sid": "ListDataArtifactBuckets",
+            "Effect": "Allow",
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetBucketLocation"
+            ],
+            "Resource": [
+                "arn:aws:s3:::condor-data-bucket",
+                "arn:aws:s3:::condor-artifacts-bucket"
+            ]
+        },
+        {
+            "Sid": "RWDataArtifactObjects",
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:GetObjectVersion",
+                "s3:PutObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::condor-data-bucket/*",
+                "arn:aws:s3:::condor-artifacts-bucket/*"
+            ]
+        },
+        {
+            "Sid": "SageMakerPipeline",
+            "Effect": "Allow",
+            "Action": [
+                "sagemaker:CreateTrainingJob",
+                "sagemaker:DescribeTrainingJob",
+                "sagemaker:CreateModel",
+                "sagemaker:DescribeModel",
+                "sagemaker:CreateModelPackageGroup",
+                "sagemaker:CreateModelPackage",
+                "sagemaker:ListModelPackages",
+                "sagemaker:CreateEndpointConfig",
+                "sagemaker:CreateEndpoint",
+                "sagemaker:UpdateEndpoint",
+                "sagemaker:DescribeEndpoint"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "EcsRunTask",
+            "Effect": "Allow",
+            "Action": [
+                "ecs:RunTask",
+                "ecs:DescribeTasks",
+                "ecs:StopTask",
+                "ecs:DescribeClusters",
+                "ecs:DescribeTaskDefinition"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Sid": "AllowPassRoles",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": [
+                "arn:aws:iam::177024578536:role/condor-sagemaker-exec-role",
+                "arn:aws:iam::177024578536:role/condor-ecs-task-role",
+                "arn:aws:iam::177024578536:role/condor-ecs-task-exec-role"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "iam:PassedToService": [
+                        "sagemaker.amazonaws.com",
+                        "ecs-tasks.amazonaws.com"
+                    ]
+                }
+            }
+        }
+    ]
+}
+```
