@@ -2,7 +2,7 @@
 
 This is a **code-only** deployment of a production end-to-end machine learning pipeline inclusive of MLOps on AWS using:
 - **Terraform (infra coordination)** - VPC, ECR, ECS, Fargate, S3, IAM, CloudWatch
-- **Github Actions (CI/CD)** - Auto-deployment of images to ECR on successful main branch commit
+- **Github Actions with AWS OIDC (CI/CD)** - Auto-deployment of images to ECR on successful main branch commit
 - **Docker + ECS (Fargate first, EC2-ready)**
 - **SageMaker** for training/hosting
 - **Docker Airflow & MWAA (AWS Managed Airflow)** for orchestration
@@ -138,12 +138,42 @@ $ make down
 ```bash
 # Make sure steps 1-4 from Quick Start are done first!
 
+# make sure your aws configure is set locally with you IAM
+$ aws configure --profile kevin_xxxx
+
+# confirm aws configure made ~/.aws/credentials & ~/.aws/config correctly (you can manually set if not)
+$ cd ~/.aws/
+$ nano credentials
+>>
+  # make sure to add the identical steps from your IAM role above
+
+  # [default]
+  # aws_access_key_id = xxxxxxxxxx
+  # aws_secret_access_key = xxxxxxxx
+
+  # Add IAM profile you created
+  # [kevin_xxxxxx]
+  # aws_access_key_id = xxxxxxxxxx
+  # aws_secret_access_key = xxxxxxxx
+
+$ nano config
+>>
+  #[default]
+  # region = us-west-2
+  # output = json
+  # [profile kevin_xxxx]
+  # region = us-west-2
+  # output = json
+
 ## Setup Airflow Docker Env
 $ cd airflow
 $ docker compose up -d
 $ docker compose exec airflow-apiserver env | grep -E 'AWS_|PREFIX|GITHUB_TOKEN'
 >> 
   confirms root credentials were set in Airflow
+
+# confirm you've pushed images to ECR (you can skip if you already have)
+$ make build-push
 
 # confirm some data is in the bucket
 $ make prep-data
@@ -152,7 +182,7 @@ $ make prep-data
 $ make af-vars-clear
 
 # set airflow variables from terraform generated values 
-$ make af-vars-from-tf-min
+$ make af-vars-from-tf
 
 # show what was set
 $ make af-vars-show

@@ -73,12 +73,12 @@ resource "aws_ecs_task_definition" "features" {
   container_definitions = jsonencode([
     {
       name      = "features",
-      image     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/condor-batch:latest",
+      image     = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/condor-features:latest",
       essential = true,
-      command   = ["python","/app/features_job.py","--bucket","${var.data_bucket_name}","--prefix","features/"],
       environment = [
         { "name":"AWS_REGION", "value": var.region },
-        { "name":"DATA_BUCKET", "value": var.data_bucket_name }
+        { "name":"DATA_BUCKET", "value": var.data_bucket_name },
+        { "name":"OUT_PREFIX",  "value": "features/" }
       ],
       logConfiguration = {
         logDriver = "awslogs",

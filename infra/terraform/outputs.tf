@@ -10,10 +10,14 @@ output "private_subnets" {
 }
 
 # ECS module outputs
-output "ecs_security_group_ids" {
+output "ecs_security_group_ids" { 
   value = module.ecs.security_group_ids
+  description = "Security Group IDs for ECS tasks"
 }
-output "features_task_def_arn"  { value = module.ecs.features_task_def_arn }
+output "features_task_def_arn"  { 
+  value = module.ecs.features_task_def_arn
+  description = "ARN of the ECS Task Build Features task definition"
+}
 
 # SageMaker execution role ARN (used by training and endpoint creation)
 output "sagemaker_role_arn" {
