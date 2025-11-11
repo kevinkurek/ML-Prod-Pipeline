@@ -42,6 +42,34 @@ $ nano .env
   # PREFIX=condor
   # GITHUB_TOKEN=ghp_xxxxxxx
 
+# make sure your aws configure is set locally with you IAM
+$ aws configure --profile kevin_xxxx
+
+# confirm aws configure made ~/.aws/credentials & ~/.aws/config correctly (you can manually set if not)
+$ cd ~/.aws/
+$ nano credentials
+>>
+  # make sure to add the identical steps from your IAM role above
+
+  # [default]
+  # aws_access_key_id = xxxxxxxxxx
+  # aws_secret_access_key = xxxxxxxx
+
+  # Add IAM profile you created
+  # [kevin_xxxxxx]
+  # aws_access_key_id = xxxxxxxxxx
+  # aws_secret_access_key = xxxxxxxx
+
+$ nano config
+>>
+  #[default]
+  # region = us-west-2
+  # output = json
+  # [profile kevin_xxxx]
+  # region = us-west-2
+  # output = json
+  
+
 # quick spot-check creds were set correctly
 $ make env-check
 >>
@@ -137,33 +165,6 @@ $ make down
 ## Run a Local Airflow Render, Test, Debug, & Trigger
 ```bash
 # Make sure steps 1-4 from Quick Start are done first!
-
-# make sure your aws configure is set locally with you IAM
-$ aws configure --profile kevin_xxxx
-
-# confirm aws configure made ~/.aws/credentials & ~/.aws/config correctly (you can manually set if not)
-$ cd ~/.aws/
-$ nano credentials
->>
-  # make sure to add the identical steps from your IAM role above
-
-  # [default]
-  # aws_access_key_id = xxxxxxxxxx
-  # aws_secret_access_key = xxxxxxxx
-
-  # Add IAM profile you created
-  # [kevin_xxxxxx]
-  # aws_access_key_id = xxxxxxxxxx
-  # aws_secret_access_key = xxxxxxxx
-
-$ nano config
->>
-  #[default]
-  # region = us-west-2
-  # output = json
-  # [profile kevin_xxxx]
-  # region = us-west-2
-  # output = json
 
 ## Setup Airflow Docker Env
 $ cd airflow
