@@ -128,7 +128,7 @@ nuke-ecr:
 	 for r in $$repos; do echo "Deleting $$r (force)"; aws ecr delete-repository --repository-name "$$r" --region "$(AWS_REGION)" --force; done ; fi
 
 # --- SageMaker training and endpoint creation ---
-.PHONY: sm-train sm-create-endpoint sm-smoke-test sm-logs
+.PHONY: sm-train sm-create-endpoint sm-smoke-test sm-logs sm-load-test
 
 # Train a model on SageMaker using the training image and data in S3
 sm-train:
@@ -226,6 +226,12 @@ sm-logs:
 	  --limit 10 \
 	  --query 'events[].{Time:@.timestamp,Message:@.message}' \
 	  --output table
+
+# Load test the SageMaker endpoint to warm up metrics (adjust COUNT/CONCURRENCY, add ARGS="--randomize" to vary payloads)
+COUNT ?= 100
+CONCURRENCY ?= 10
+sm-load-test:
+	$(PYTHON) tools/load_test_endpoint.py --endpoint condor-xgb --region $(AWS_REGION) --count $(COUNT) --concurrency $(CONCURRENCY) $(ARGS)
 
 # ---- SageMaker cleanup ----
 .PHONY: sm-status sm-teardown

@@ -8,5 +8,5 @@ variable "region" {
 
 variable "profile" {
   type    = string
-  default = "kevin_sandbox"
+  default = "kevin_sandbox2"
 }

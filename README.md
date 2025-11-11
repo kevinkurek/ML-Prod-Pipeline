@@ -207,6 +207,17 @@ $ make af-trigger DAG=condor_ml_pipeline
 $ make sm-smoke-test
 ```
 
+## Load Test the Endpoint and get p50 & p95 as CloudWatch Dashboards
+```bash
+# send 100 requests to endpoint
+$ make sm-load-test
+>>
+   --- Summary ---
+  Requests: 100 success / 0 errors
+  Latency avg=558.1ms p50=70.1ms p95=4196.9ms max=8707.0ms
+  NOTE: CloudWatch metrics (ModelLatency) may appear after a short   delay.
+```
+
 ## Repo Layout
 ```
 ├── Makefile
